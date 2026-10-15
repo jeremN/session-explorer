@@ -113,3 +113,8 @@ test('a failed creation prints the URL of the pull request that already exists: 
 	const output = 'a pull request for branch "feat" into branch "main" already exists:\nhttps://github.com/acme/web/pull/7';
 	assert.deepEqual(mrMentions([bash(0, 'c', 'gh pr create --fill'), failed(2, 'c', output)]), [{ key: 'acme/web#7', t: at(2), pushed: false }]);
 });
+
+test('a push that GitLab answered created the merge request, even when a later command of the same call failed', () => {
+	const entries = [bash(0, 'p', `${CREATE} && missing-command`), failed(5, 'p', `Exit code 1\n${PUSH_OUTPUT}(eval):1: command not found: missing-command`)];
+	assert.deepEqual(mrMentions(entries), [{ key: 'acme/web!101', t: at(0), pushed: true }]);
+});

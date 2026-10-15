@@ -14,14 +14,16 @@ type Counts = { tasks: number; before: number; after: number; never: number; mem
 // The knowledge base ("brain") is set in the config file. Without it, only an unscoped qmd search counts as a brain search.
 export type Config = {
 	projects?: string;
-	brain?: { paths?: string[]; collections?: string[]; wikiDirectories?: string[] };
+	brain?: { paths?: string[]; repositories?: string[]; collections?: string[]; wikiDirectories?: string[] };
 	memory?: { collections?: string[] };
 };
 const NEVER = /(?!)/;
 const anyOf = (patterns: string[]) => (patterns.length === 0 ? NEVER : new RegExp(patterns.join('|')));
 function compile(config: Config) {
 	const brainPath = anyOf(config.brain?.paths ?? []);
-	const brainOrHome = brainPath === NEVER ? '' : `|${brainPath.source}`;
+	// `repositories` widens the edit exclusion to the whole brain repository. It defaults to the search paths.
+	const repositories = anyOf(config.brain?.repositories ?? config.brain?.paths ?? []);
+	const brainOrHome = repositories === NEVER ? '' : `|${repositories.source}`;
 	return {
 		brainPath,
 		brainCollections: new Set(config.brain?.collections ?? []),

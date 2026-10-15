@@ -35,10 +35,12 @@ export function mrMentions(entries: unknown[]): MrMention[] {
 		const pushed = new Set<string>();
 		for (const block of content) {
 			if (block?.type === 'tool_use' && CREATE_COMMAND.test(String(block.input?.command ?? ''))) pushAt = entry.timestamp;
-			// A failed command prints the URL of a merge request that already exists.
-			if (block?.type !== 'tool_result' || block.is_error || pushAt === undefined) continue;
+			if (block?.type !== 'tool_result' || pushAt === undefined) continue;
 			const output = resultText(block.content);
-			for (const [, url] of [...output.matchAll(REMOTE_LINE), ...output.matchAll(URL_LINE)]) for (const key of keysIn(url)) pushed.add(key);
+			// A `remote:` line proves that GitLab took the push, even when a later command of the same call failed.
+			// A failed `gh pr create` prints the URL of a pull request that already exists.
+			const lines = block.is_error ? output.matchAll(REMOTE_LINE) : [...output.matchAll(REMOTE_LINE), ...output.matchAll(URL_LINE)];
+			for (const [, url] of lines) for (const key of keysIn(url)) pushed.add(key);
 		}
 		for (const key of new Set(keysIn(JSON.stringify(entry)))) {
 			mentions.push(pushed.has(key) ? { key, t: pushAt!, pushed: true } : { key, t: entry.timestamp, pushed: false });

@@ -3,14 +3,15 @@ import { test } from 'node:test';
 
 import { classify, configureKnowledge, summarize, traceSession, traceTasks } from './tracer.ts';
 
-configureKnowledge({
+const CONFIG = {
 	brain: {
 		paths: ['team-brain[\\w-]*\\/wiki', 'notes\\/vault'],
 		collections: ['brain', 'notes'],
 		wikiDirectories: ['concepts', 'decisions', 'known-bugs', 'playbooks']
 	},
 	memory: { collections: ['memory-notes'] }
-});
+};
+configureKnowledge(CONFIG);
 
 const REPO = '/Users/dev/Documents/Code/Work/acme';
 const WIKI = '/Users/dev/Documents/Code/Work/team-brain/wiki';
@@ -193,6 +194,17 @@ test('without a config, no path is a brain path and an unscoped qmd search still
 		assert.equal(classify('Edit', { file_path: `${WIKI}/concepts/a.md` }), 'edit');
 		assert.equal(classify('mcp__plugin_qmd_qmd__query', { searches: [] }), 'brain');
 	} finally {
-		configureKnowledge({ brain: { paths: ['team-brain[\\w-]*\\/wiki', 'notes\\/vault'], collections: ['brain', 'notes'], wikiDirectories: ['concepts', 'decisions', 'known-bugs', 'playbooks'] }, memory: { collections: ['memory-notes'] } });
+		configureKnowledge(CONFIG);
+	}
+});
+
+test('an edit anywhere in a brain repository is not a task; a read outside its search paths is not a search', () => {
+	configureKnowledge({ ...CONFIG, brain: { ...CONFIG.brain, repositories: ['\\/team-brain'] } });
+	try {
+		assert.equal(classify('Edit', { file_path: '/Users/dev/Documents/Code/Work/team-brain/log.md' }), undefined);
+		assert.equal(classify('Bash', { command: "sed -i '' 's/a/b/' ~/Documents/Code/Work/team-brain/log.md" }), undefined);
+		assert.equal(classify('Read', { file_path: '/Users/dev/Documents/Code/Work/team-brain/log.md' }), undefined);
+	} finally {
+		configureKnowledge(CONFIG);
 	}
 });

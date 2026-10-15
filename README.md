@@ -58,6 +58,7 @@ The configuration file is optional. The tool reads `$SESSION_EXPLORER_CONFIG`, o
   "projects": "-Code-my-app(--.*)?$",
   "brain": {
     "paths": ["team-wiki/docs", "notes/vault"],
+    "repositories": ["/team-wiki", "/notes"],
     "collections": ["wiki"],
     "wikiDirectories": ["decisions", "playbooks"]
   },
@@ -68,7 +69,8 @@ The configuration file is optional. The tool reads `$SESSION_EXPLORER_CONFIG`, o
 | Key | Meaning |
 |---|---|
 | `projects` | Default for `--projects`. Without it, every project is read. |
-| `brain.paths` | Regular expressions for the paths of your knowledge base. A `Read`, `Grep`, `cat` or `grep` on one of them is a knowledge-base search. An edit inside them is not a task. |
+| `brain.paths` | Regular expressions for the paths of your knowledge base. A `Read`, `Grep`, `cat` or `grep` on one of them is a knowledge-base search. |
+| `brain.repositories` | Regular expressions for the repositories that hold the knowledge base. An edit inside them maintains the knowledge base, so it is not a task. Default: `brain.paths`. |
 | `brain.collections` | [qmd](https://github.com/tobi/qmd) collections that hold the knowledge base. |
 | `brain.wikiDirectories` | First directories of a qmd path given without its collection. |
 | `memory.collections` | qmd collections that hold agent memory. A read of `~/.claude/projects/*/memory/` always counts as memory. |
@@ -85,10 +87,10 @@ All thresholds are choices, not measured optima. They are constants at the top o
 - **Retry streak.** The same call (agent, tool, target) after a failure of that call, within the last 8 calls of the agent. It overlaps with error loops: do not add the two rows.
 - **Subagent runs.** Raw cost of each subagent. No verdict on whether it was worth it.
 - **Created merge request or pull request.** The first mention of a merge request, over all sessions in the window, comes from a creating command:
-  - GitLab: a `remote:` line after `git push -o merge_request.create`;
-  - GitHub: a line that starts with the pull request URL after `gh pr create`.
+  - GitLab: a `remote:` line after `git push -o merge_request.create`. The line counts even when a later command of the same call failed;
+  - GitHub: a line that starts with the pull request URL after `gh pr create`. A failed call creates nothing: it prints the URL of the pull request that already exists.
 
-  The rule uses the first mention because GitLab prints the same `remote:` line for a merge request that already exists. A command that failed creates nothing.
+  The rule uses the first mention because GitLab prints the same `remote:` line for a merge request that already exists.
 
 ## Output
 
