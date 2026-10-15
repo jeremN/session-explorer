@@ -1,0 +1,16 @@
+{
+  "name": "session-explorer",
+  "version": "0.1.0",
+  "description": "Replay Claude Code sessions, find where the tokens went, and see which pull requests they shipped.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=23.6" },
+  "scripts": {
+    "test": "node --test",
+    "build": "node session-explorer/build.ts",
+    "waste": "node session-explorer/build.ts --waste",
+    "serve": "node session-explorer/build.ts --serve",
+    "trace": "node context-tracer/tracer.ts"
+  }
+}
