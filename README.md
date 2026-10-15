@@ -92,6 +92,31 @@ All thresholds are choices, not measured optima. They are constants at the top o
 
   The rule uses the first mention because GitLab prints the same `remote:` line for a merge request that already exists.
 
+## Optional hook: cache-warn
+
+`cache-warn/hook.ts` is a `UserPromptSubmit` hook. It warns you when your prompt meets a cold cache on a large context. It never blocks the prompt.
+
+The hook warns when two conditions are true:
+
+- the last request of the session is older than the cache lifetime (1 hour, or 5 minutes after a 5-minute cache write);
+- that request had a context of 100,000 tokens or more.
+
+The warning gives the pause, the context size and the extra cost over a warm cache. It shows once per pause. The hook also appends one line to `~/.claude/logs/cache-warn.jsonl`, with numbers and ids only, never prompt text.
+
+To install it, add this entry to `~/.claude/settings.json`. Replace the path with the path of your clone.
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node /path/to/session-explorer/cache-warn/hook.ts", "timeout": 5 }] }
+    ]
+  }
+}
+```
+
+The hook prices the request with `session-explorer/price.ts`. Any failure ends with exit code 0 and no output. A child process started with `CC_HANDOFF_LLM` set skips the hook.
+
 ## Output
 
 | File | Content |
@@ -108,7 +133,7 @@ All thresholds are choices, not measured optima. They are constants at the top o
 - Prices come from the table in `price.ts`, at public list prices. A model that is missing gets no cost, and the build prints its name.
 - A merge request created before the window, then pushed again with `-o merge_request.create`, counts as created. A merge request created in a web UI is not seen. GitHub Enterprise hosts are not recognized.
 - The retry key of an MCP call has no arguments, so two different calls to the same MCP tool after a failure count as a retry.
-- The viewer text is in French.
+- The viewer text and the cache-warn message are in French.
 
 ## Credits
 
