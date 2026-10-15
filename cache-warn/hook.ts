@@ -9,7 +9,8 @@ import type { Row } from './decide.ts';
 
 // The end of the transcript holds the last request. A full read of a long session is too slow for a hook.
 const TAIL_BYTES = 4 * 1024 * 1024;
-const STATE_DIR = path.join(os.tmpdir(), 'cc-cache-warn');
+// Under the home directory: a shared /tmp lets another user plant a symbolic link in the state directory.
+const STATE_DIR = path.join(os.homedir(), '.claude', 'cache-warn-state');
 const LOG = path.join(os.homedir(), '.claude', 'logs', 'cache-warn.jsonl');
 
 function tailRows(file: string): Row[] {
