@@ -11,6 +11,7 @@
     "build": "node session-explorer/build.ts",
     "waste": "node session-explorer/build.ts --waste",
     "serve": "node session-explorer/build.ts --serve",
-    "trace": "node context-tracer/tracer.ts"
+    "trace": "node context-tracer/tracer.ts",
+    "heartbeat": "node hook-heartbeat/heartbeat.ts"
   }
 }

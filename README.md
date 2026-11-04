@@ -45,9 +45,10 @@ Merge requests created: 40 in 15 sessions. These sessions cost 350 dollars (35 %
 | `... --waste` | Also print the waste table |
 | `... --serve [--port 4173]` | Also serve the viewer |
 | `node context-tracer/tracer.ts [--json]` | Print the knowledge-base verdicts per week |
+| `node hook-heartbeat/heartbeat.ts [--json]` | Tell, for each configured hook, when it last fired and whether it looks dead |
 | `node --test` | Run the test suite |
 
-Both scripts take `--days N` (default 30) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
+All three scripts take `--days N` (default 30, 14 for the heartbeat) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
 
 ## Configuration
 
@@ -91,6 +92,55 @@ All thresholds are choices, not measured optima. They are constants at the top o
   - GitHub: a line that starts with the pull request URL after `gh pr create`. A failed call creates nothing: it prints the URL of the pull request that already exists.
 
   The rule uses the first mention because GitLab prints the same `remote:` line for a merge request that already exists.
+
+## Hook heartbeat
+
+A hook can die without a sound: a renamed script, a broken `jq` pipe, a timeout. Claude Code goes on, and nothing tells you that the gate stopped. `hook-heartbeat/heartbeat.ts` reads the configured hooks and the transcripts, and gives one verdict per hook.
+
+```sh
+node hook-heartbeat/heartbeat.ts --days 14 --project /path/to/my-app
+```
+
+| Option | Meaning |
+|---|---|
+| `--days N` | Window of the report. Default 14. |
+| `--baseline-days N` | Period before the window that gives the usual trace rate of each hook. Default 60. |
+| `--project <dir>` | Also read `<dir>/.claude/settings.json` and `settings.local.json`. Repeat it for several projects. A project hook counts only the sessions whose working directory is inside `<dir>`. |
+| `--json` | Print the `harness/v1` result. |
+
+The tool reads the hooks of `~/.claude/settings.json`, `~/.claude/settings.local.json`, the project files, and the enabled plugins (`hooks/hooks.json`, or `hooks` in `.claude-plugin/plugin.json`, of the installed version). The configuration key `heartbeat.projects` holds default project directories.
+
+| Verdict | Meaning |
+|---|---|
+| `alive` | The hook left a trace in the window, and its last traces are not all errors. |
+| `erroring` | Its last 3 traces (or fewer, if it has fewer) are errors: a timeout, a non-blocking error, or an exit code other than 0 and 2. |
+| `silent` | No trace in the window, while its event occurred and at least 5 traces were expected. |
+| `unknown` | The transcripts cannot tell. The `reason` field says why. |
+
+### How a hook leaves a trace
+
+Observed in Claude Code 2.1 transcripts:
+
+| Row | Written when | Names the command |
+|---|---|---|
+| `attachment.type: hook_success` | The hook printed something on stdout or stderr | Yes, or its `statusMessage` when it has one |
+| `hook_cancelled` | The hook timed out (`timedOut: true`) or was cancelled | Yes |
+| `hook_non_blocking_error` | The hook failed without blocking | Yes |
+| `async_hook_response` | An async hook answered | Since mid-October 2026, with `pluginId` for a plugin hook; before, often empty |
+| `hook_additional_context`, `hook_system_message`, `hook_blocking_error` | The hook added context, showed a message, or blocked | No |
+| `system`, `subtype: stop_hook_summary` | A Stop event ran its hooks | Yes, every Stop hook in `hookInfos`, quiet or not, with its duration |
+
+A trace that names no command goes to the only hook that could have left it. With several candidates, it counts as `shared` for each of them, and in `unattributed` per event.
+
+A quiet hook that succeeds leaves no trace. So `silent` compares the window with the usual trace rate of the hook: traces per event during the baseline period. A Stop hook has a rate of 1, because the stop summary lists it every time. The events come from the transcripts: tool calls for `PreToolUse`, successful tool results for `PostToolUse`, user prompts for `UserPromptSubmit`, stop summaries for `Stop`, compactions for `PreCompact`, and the traces of all `SessionStart` hooks for `SessionStart`. Other events have no count.
+
+### Limitations
+
+- A hook that never prints anything gets `unknown`, unless it is a Stop hook. The tool cannot tell a quiet hook from a hook that never ran.
+- When several hooks share an event and leave anonymous traces (`UserPromptSubmit` often), none of them can be called silent.
+- A hook with an `if` condition gets no event count: the transcript does not evaluate the condition.
+- A hook added during the window has events counted from the start of the window.
+- The trace formats are not a documented contract. A Claude Code update can change them.
 
 ## Optional hook: cache-warn
 
