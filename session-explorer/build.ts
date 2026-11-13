@@ -61,15 +61,21 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 	};
 }
 
-// `/data/...` is read in `outDir`, everything else in `viewerDir`. A path that leaves its root is refused.
-export function resolveRequest(url: string, viewerDir: string, outDir: string): string | undefined {
+// `/data/...` is read in `outDir`, `/evals/...` in `evalDir`, everything else in `viewerDir`. A path that leaves its root is refused.
+export function resolveRequest(url: string, viewerDir: string, outDir: string, evalDir: string): string | undefined {
 	let path: string;
 	try {
 		path = decodeURIComponent(new URL(url, 'http://localhost').pathname);
+		// The URL parser folds `/evals/../x` into `/x`. A request that names `..` is refused, not rerouted.
+		if (decodeURIComponent(url.split(/[?#]/)[0]).split('/').includes('..')) return undefined;
 	} catch {
 		return undefined;
 	}
-	const [root, relative] = path.startsWith('/data/') ? [outDir, path.slice('/data/'.length)] : [viewerDir, path === '/' ? 'index.html' : path.slice(1)];
+	const [root, relative] = path.startsWith('/data/')
+		? [outDir, path.slice('/data/'.length)]
+		: path.startsWith('/evals/')
+			? [evalDir, path.slice('/evals/'.length)]
+			: [viewerDir, path === '/' ? 'index.html' : path.slice(1)];
 	const file = resolve(root, relative);
 	return file.startsWith(resolve(root) + sep) ? file : undefined;
 }
@@ -79,7 +85,7 @@ export function allowedHost(host: string | undefined, port: number) {
 	return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
-function readAgentMeta(subagentFiles: string[]) {
+export function readAgentMeta(subagentFiles: string[]) {
 	const meta: Record<string, AgentMeta> = {};
 	for (const file of subagentFiles) {
 		try {
@@ -92,13 +98,13 @@ function readAgentMeta(subagentFiles: string[]) {
 	return meta;
 }
 
-function serve(viewerDir: string, outDir: string, port: number) {
+function serve(viewerDir: string, outDir: string, evalDir: string, port: number) {
 	const server = createServer((request, response) => {
 		if (!allowedHost(request.headers.host, port)) {
 			response.writeHead(403).end('Forbidden');
 			return;
 		}
-		const file = resolveRequest(request.url ?? '/', viewerDir, outDir);
+		const file = resolveRequest(request.url ?? '/', viewerDir, outDir, evalDir);
 		const type = file && MIME[extname(file)];
 		if (!file || !type || !existsSync(file)) {
 			response.writeHead(404).end('Not found');
@@ -126,6 +132,8 @@ function main() {
 	const port = Number(argument('--port') ?? 4173);
 	const outDir = join(import.meta.dirname, 'out');
 	const viewerDir = join(import.meta.dirname, 'viewer');
+	// Eval results live apart from `outDir`: the build deletes `outDir` at each run.
+	const evalDir = join(import.meta.dirname, '..', 'eval-runner', 'out');
 	const root = join(homedir(), '.claude', 'projects');
 	const cutoffMs = Date.now() - days * 86_400_000;
 	const cutoff = new Date(cutoffMs).toISOString();
@@ -198,7 +206,7 @@ function main() {
 		const deliveringCost = dollars(delivering.reduce((total, row) => total + row.cost, 0));
 		console.log(`Merge requests created: ${mrCount} in ${delivering.length} sessions. These sessions cost ${deliveringCost} dollars (${share(deliveringCost)} of the total).`);
 	}
-	if (process.argv.includes('--serve')) serve(viewerDir, outDir, port);
+	if (process.argv.includes('--serve')) serve(viewerDir, outDir, evalDir, port);
 }
 
 if (import.meta.main) main();

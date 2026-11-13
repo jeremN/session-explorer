@@ -134,6 +134,20 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
 .find input,.find select{min-width:0;min-height:34px;background:var(--surface);color:var(--ink);border:0;border-radius:var(--r-inset);padding:0 8px;font:400 12px var(--font-ui)}
 .find input{flex:1}
 .find input:focus-visible,.find select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+/* Évaluations view */
+#viewEvals{display:flex;flex-direction:column;gap:16px}
+.ev-body{display:flex;flex-direction:column;gap:16px}
+.ev-line{margin:0 0 10px;font:500 12px var(--font-mono);color:var(--ink2)}
+.ev-scroll{overflow-x:auto}
+.ev-table{border-collapse:collapse;width:100%;min-width:520px;font:400 12px var(--font-mono);font-variant-numeric:tabular-nums}
+.ev-table th{padding:6px 8px;text-align:left;font-weight:500;color:var(--muted);border-bottom:1px solid var(--axis)}
+.ev-table td{padding:6px 8px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--grid)}
+.ev-table tbody th{color:var(--ink2)}
+.ev-table td[data-best] .ev-med{color:var(--positive);font-weight:600}
+.ev-med{color:var(--ink)}
+.ev-range{color:var(--muted);margin-inline-start:4px}
+.ev-dots{display:block;margin-top:4px}
+.ev-runs a{color:var(--s1)}
 @media (max-width:1000px){.topgrid{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:900px){
   .picker{flex-basis:100%;max-width:none}
@@ -161,9 +175,14 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
     <div class="seg" role="group" aria-label="Vue">
       <button type="button" data-view="session" aria-pressed="true">Sessions</button>
       <button type="button" data-view="waste" aria-pressed="false">Gaspillage</button>
+      <button type="button" data-view="evals" aria-pressed="false">Évaluations</button>
     </div>
     <span class="badge" id="badge"></span>
   </header>
+    <main id="viewEvals" hidden>
+      <div class="find" id="evPick"><select id="evSel" aria-label="Choisir une évaluation"></select></div>
+      <div id="evBody" class="ev-body"></div>
+    </main>
     <main id="viewWaste" hidden>
       <p class="wsum" id="wsum"></p>
       <section class="panel pbox" id="pbox" hidden>
@@ -249,6 +268,7 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
 <script type="module">
 import { adapt, esc } from './adapt.mjs';
 import { pill, stat, wireSeg } from './ui.mjs';
+import { renderEval, renderEvalOptions } from './evals.mjs';
 document.querySelectorAll('.seg').forEach(wireSeg);
 const $=s=>document.querySelector(s);
 const pad=n=>String(n).padStart(2,'0');
@@ -281,7 +301,7 @@ function labelOf(id){const p=id.indexOf(':');const k=id.slice(0,p),v=id.slice(p+
 function fullOf(id){return id.slice(id.indexOf(':')+1)}
 
 let S,i=0,playing=false,speed=4,acc=0,lastTs=0,hover=null,scrub=false,sessIdx=-1;
-let INDEX={sessions:[]},ROWS=[],VIEW='session',WASTE=null;
+let INDEX={sessions:[]},ROWS=[],VIEW='session',WASTE=null,EVALS=null,EVAL_ID=null,evSeq=0;
 const cache=new Map();
 let loadSeq=0;
 const C={};
@@ -823,13 +843,49 @@ function renderWaste(){
     box.appendChild(section);
   });
 }
+/* ---------- evals view ---------- */
+async function loadEvals(){
+  const seq=++evSeq,body=$('#evBody');
+  if(!EVALS){
+    try{
+      const r=await fetch('evals/index.json');
+      if(!r.ok)throw new Error(r.status);
+      EVALS=(await r.json()).evals;
+    }catch{EVALS=[]}
+  }
+  if(seq!==evSeq)return;
+  if(!EVALS.length){
+    $('#evPick').hidden=true;
+    body.innerHTML='<p class="wsum">Aucune évaluation. Lancez : node eval-runner/run.ts &lt;spec.json&gt;</p>';
+    return;
+  }
+  const id=EVALS.some(e=>e.id===EVAL_ID)?EVAL_ID:EVALS[0].id;
+  $('#evPick').hidden=false;
+  $('#evSel').innerHTML=renderEvalOptions(EVALS,id);
+  try{
+    const r=await fetch('evals/'+encodeURIComponent(id)+'/eval.json');
+    if(!r.ok)throw new Error(r.status);
+    const data=await r.json();
+    if(seq!==evSeq)return;
+    body.innerHTML=renderEval(data);
+  }catch{
+    if(seq!==evSeq)return;
+    body.innerHTML='<p class="wsum">Évaluation illisible : evals/'+esc(id)+'/eval.json</p>';
+  }
+}
+$('#evSel').addEventListener('change',ev=>{
+  EVAL_ID=ev.target.value;
+  history.pushState(null,'','#evals/'+EVAL_ID);
+  loadEvals();
+});
 async function showView(view){
   if(view===VIEW)return;
   VIEW=view;
-  $('#viewSession').hidden=view!=='session';$('#viewWaste').hidden=view!=='waste';
+  $('#viewSession').hidden=view!=='session';$('#viewWaste').hidden=view!=='waste';$('#viewEvals').hidden=view!=='evals';
   document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));
   if(view==='session')return;
   playing=false;
+  if(view==='evals'){loadEvals();return}
   if(WASTE)return;
   try{
     const r=await fetch('data/waste.json');
@@ -844,7 +900,7 @@ async function showView(view){
 document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>{
   const view=b.dataset.view;
   if(view===VIEW)return;
-  const hash=view==='waste'?'#waste':S&&ROWS[sessIdx]?'#'+ROWS[sessIdx].id+'@'+i:'';
+  const hash=view==='waste'?'#waste':view==='evals'?'#evals'+(EVAL_ID?'/'+EVAL_ID:''):S&&ROWS[sessIdx]?'#'+ROWS[sessIdx].id+'@'+i:'';
   if(hash&&hash!==location.hash)history.pushState(null,'',hash);
   showView(view);
 }));
@@ -902,15 +958,22 @@ $('#picker').addEventListener('keydown',ev=>{
     INDEX=await r.json();
   }catch{
     $('#title').textContent='Index introuvable. Lancez : node build.ts --serve';
+    if(location.hash.startsWith('#evals'))openFromHash(true);
     return;
   }
   $('#badge').textContent=INDEX.days+' j · généré le '+new Date(INDEX.generatedAt).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
   applyFilter();
-  if(!ROWS.length){$('#title').textContent='Aucune session dans la fenêtre.';return}
+  if(!ROWS.length){$('#title').textContent='Aucune session dans la fenêtre.';if(location.hash.startsWith('#evals'))openFromHash(true);return}
   openFromHash(true);
 })();
 function openFromHash(first){
   const [id,at]=location.hash.slice(1).split('@');
+  if(id==='evals'||id.startsWith('evals/')){
+    EVAL_ID=id.slice('evals/'.length)||null;
+    if(VIEW==='evals')loadEvals();else showView('evals');
+    if(first&&ROWS.length)selectSession(0,0);
+    return;
+  }
   if(id==='waste'){showView('waste');if(first&&ROWS.length)selectSession(0,0);return}
   showView('session');
   const index=Math.trunc(+at)||0;

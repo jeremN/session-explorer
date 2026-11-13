@@ -1,0 +1,87 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { metricCell, passPill, renderEval, renderEvalOptions, renderRuns } from '../session-explorer/viewer/evals.mjs';
+
+const spread = (values: number[]) => {
+	const sorted = [...values].sort((a, b) => a - b);
+	return { n: values.length, median: sorted[sorted.length >> 1], min: sorted[0], max: sorted.at(-1), values };
+};
+const run = (id: string, config: string, extra: Record<string, unknown> = {}) => ({
+	id,
+	config,
+	status: 'ok',
+	sessionId: `sess-${id}`,
+	wallSec: 120,
+	acceptance: { passed: true },
+	diff: { files: 1, added: 12, deleted: 3 },
+	metrics: { cost: 0.5 },
+	...extra
+});
+const sample = (name = 'baseline') => ({
+	id: '20261113-142000-format-dollars',
+	name: 'format-dollars',
+	spent: 4.12,
+	baseSha: '1a2b3c4d5e6f',
+	spec: { task: { repo: '/home/me/repo' }, runs: 3 },
+	configs: [
+		{ name, model: 'sonnet', pass: { passed: 2, n: 3 }, metrics: { cost: spread([0.52, 0.94, 0.71]), errors: spread([0, 0, 0]), verified: spread([1, 0, 0]) } },
+		{ name: 'terse', model: 'sonnet', pass: { passed: 3, n: 3 }, metrics: { cost: spread([0.4, 0.45, 0.61]), errors: spread([0, 0, 0]), verified: spread([1, 1, 1]) } }
+	],
+	runs: [run('baseline-1', name), run('terse-1', 'terse', { status: 'timeout', acceptance: { passed: false } }), run('baseline-2', name, { status: 'skipped', sessionId: undefined })]
+});
+
+test('a metric cell holds the median, the min-max text and one dot per counted run', () => {
+	const html = metricCell(spread([0.52, 0.94, 0.71]), 'cost', { min: 0.4, max: 0.94 });
+	assert.match(html, /0\.71/);
+	assert.match(html, /0\.52–0\.94/);
+	assert.equal(html.match(/<circle/g)?.length, 3);
+	assert.equal(metricCell(spread([2, 2]), 'errors', { min: 2, max: 2 }).match(/<circle/g)?.length, 2);
+});
+
+test('the pass-rate pill is positive at 3/3, warning at 2/3, negative at 0/3', () => {
+	assert.match(passPill({ passed: 3, n: 3 }), /data-tone="positive"[^>]*>3\/3</);
+	assert.match(passPill({ passed: 2, n: 3 }), /data-tone="warning"[^>]*>2\/3</);
+	assert.match(passPill({ passed: 0, n: 3 }), /data-tone="negative"[^>]*>0\/3</);
+});
+
+test('the best median of a row gets data-best, lower is better except for verified tasks', () => {
+	const html = renderEval(sample());
+	const cells = (label: string) => html.split(`<th scope="row">${label}</th>`)[1].split('</tr>')[0].split('<td');
+	assert.match(cells('Coût ($)')[2], /data-best/);
+	assert.doesNotMatch(cells('Coût ($)')[1], /data-best/);
+	assert.match(cells('Tâches vérifiées')[2], /data-best/);
+});
+
+test('a metric row where every run has 0 is hidden', () => {
+	const html = renderEval(sample());
+	assert.doesNotMatch(html, /Erreurs/);
+	assert.match(html, /Coût \(\$\)/);
+});
+
+test('the view is French, shows the totals and links a run to its session', () => {
+	const html = renderEval(sample());
+	assert.match(html, /format-dollars/);
+	assert.match(html, /repo@1a2b3c4/);
+	assert.match(html, /4\.12 \$ dépensés/);
+	assert.match(html, /href="#sess-baseline-1"/);
+	assert.match(html, /délai dépassé/);
+	assert.match(html, /ignoré/);
+	assert.doesNotMatch(html, /href="#undefined"/);
+});
+
+test('a config name, an eval name and a run id with markup are escaped', () => {
+	const evil = '<script>alert(1)</script>';
+	const data = sample(evil);
+	data.name = evil;
+	data.runs[0].id = evil;
+	const html = renderEval(data) + renderRuns(data) + renderEvalOptions([{ id: 'x', name: evil, generatedAt: '2026-11-13T14:20:00Z' }], 'x');
+	assert.doesNotMatch(html, /<script>/);
+	assert.match(html, /&lt;script&gt;/);
+});
+
+test('the option list marks the selected eval', () => {
+	const html = renderEvalOptions([{ id: 'a', name: 'one', generatedAt: '2026-11-13T14:20:00Z' }, { id: 'b', name: 'two', generatedAt: '2026-11-12T14:20:00Z' }], 'b');
+	assert.match(html, /<option value="b" selected>/);
+	assert.doesNotMatch(html, /<option value="a" selected>/);
+});

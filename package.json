@@ -12,6 +12,7 @@
     "waste": "node session-explorer/build.ts --waste",
     "serve": "node session-explorer/build.ts --serve",
     "trace": "node context-tracer/tracer.ts",
-    "heartbeat": "node hook-heartbeat/heartbeat.ts"
+    "heartbeat": "node hook-heartbeat/heartbeat.ts",
+    "eval": "node eval-runner/run.ts"
   }
 }

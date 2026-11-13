@@ -70,13 +70,19 @@ test('summarizeSession: no llm request gives zero cost and zero cache share', ()
 	assert.deepEqual([row.cost, row.cacheReadShare, row.llmRequests, row.branch], [0, 0, 0, undefined]);
 });
 
-test('resolveRequest maps the two roots and refuses a path outside them', () => {
-	assert.equal(resolveRequest('/', '/app/viewer', '/app/out'), '/app/viewer/index.html');
-	assert.equal(resolveRequest('/adapt.mjs?v=2', '/app/viewer', '/app/out'), '/app/viewer/adapt.mjs');
-	assert.equal(resolveRequest('/data/sessions/abc.json', '/app/viewer', '/app/out'), '/app/out/sessions/abc.json');
-	assert.equal(resolveRequest('/data/..%2F..%2Fsettings.json', '/app/viewer', '/app/out'), undefined);
-	assert.equal(resolveRequest('/..%2Fbuild.ts', '/app/viewer', '/app/out'), undefined);
-	assert.equal(resolveRequest('/%E0%A4%A', '/app/viewer', '/app/out'), undefined);
+test('resolveRequest maps the three roots and refuses a path outside them', () => {
+	const at = (url: string) => resolveRequest(url, '/app/viewer', '/app/out', '/app/evals');
+	assert.equal(at('/'), '/app/viewer/index.html');
+	assert.equal(at('/adapt.mjs?v=2'), '/app/viewer/adapt.mjs');
+	assert.equal(at('/data/sessions/abc.json'), '/app/out/sessions/abc.json');
+	assert.equal(at('/data/..%2F..%2Fsettings.json'), undefined);
+	assert.equal(at('/..%2Fbuild.ts'), undefined);
+	assert.equal(at('/%E0%A4%A'), undefined);
+	assert.equal(at('/evals/a/eval.json'), '/app/evals/a/eval.json');
+	assert.equal(at('/evals/index.json'), '/app/evals/index.json');
+	assert.equal(at('/evals/../x'), undefined);
+	assert.equal(at('/evals/%2e%2e/x'), undefined);
+	assert.equal(at('/evals/..%2Fout%2Findex.json'), undefined);
 });
 
 test('allowedHost accepts only the loopback names with the served port', () => {

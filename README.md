@@ -6,7 +6,7 @@ Read your Claude Code transcripts and answer three questions:
 - **What did the sessions ship?** The GitLab merge requests and GitHub pull requests each session created.
 - **Did the agent read the docs before it edited?** One verdict per task: knowledge base searched before the first edit, after it, or never.
 
-Everything runs on your machine. The tool reads `~/.claude/projects`, writes its output next to the code, and serves a viewer on `127.0.0.1` only. It has no dependencies and makes no network calls.
+Everything runs on your machine. The tool reads `~/.claude/projects`, writes its output next to the code, and serves a viewer on `127.0.0.1` only. It has no dependencies. It makes no network calls, except through `eval-runner`, which starts the `claude` CLI. The `claude` CLI is the only network user.
 
 ## Requirements
 
@@ -46,6 +46,7 @@ Merge requests created: 40 in 15 sessions. These sessions cost 350 dollars (35 %
 | `... --serve [--port 4173]` | Also serve the viewer |
 | `node context-tracer/tracer.ts [--json]` | Print the knowledge-base verdicts per week |
 | `node hook-heartbeat/heartbeat.ts [--json]` | Tell, for each configured hook, when it last fired and whether it looks dead |
+| `node eval-runner/run.ts <spec.json> [--dry-run]` | Run one task under several configurations (see [Eval runner](#eval-runner)) |
 | `node --test` | Run the test suite |
 
 All three scripts take `--days N` (default 30, 14 for the heartbeat) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
@@ -77,6 +78,91 @@ The configuration file is optional. The tool reads `$SESSION_EXPLORER_CONFIG`, o
 | `memory.collections` | qmd collections that hold agent memory. A read of `~/.claude/projects/*/memory/` always counts as memory. |
 
 Without a `brain` section, only an unscoped qmd search counts as a knowledge-base search.
+
+## Eval runner
+
+`eval-runner/` runs one task under several Claude Code configurations, N times each. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result.
+
+```sh
+node eval-runner/run.ts eval-runner/examples/format-dollars.json --dry-run   # print the plan and the maximum spend
+node eval-runner/run.ts eval-runner/examples/format-dollars.json             # real run: it starts `claude` and costs money
+node session-explorer/build.ts --serve                                        # then open the "Évaluations" view
+```
+
+Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
+
+The runner makes no network call. The `claude` CLI is the only network user, and the only thing that spends money.
+
+### Spec
+
+One JSON file per eval. Paths in it resolve against the spec directory.
+
+| Field | Meaning |
+|---|---|
+| `name` | Slug, `[a-z0-9-]+`. |
+| `task.repo` | A git repository. Only committed content is cloned. |
+| `task.base` | A commit-ish. The runner records its SHA. Default `HEAD`. |
+| `task.prompt` or `task.promptFile` | The prompt. Set exactly one. |
+| `task.timeoutSec` | Time limit of the agent. Default 900. |
+| `task.acceptance.command` | Required. It runs in the clone after the agent stops, with `EVAL_SPEC_DIR` set. Exit code 0 means passed. Keep the check script next to the spec, outside the clone. |
+| `task.acceptance.timeoutSec` | Default 300. |
+| `budget.perRunUsd`, `budget.perEvalUsd` | Both required. |
+| `runs` | Runs per configuration, 1 to 20. Default 3. |
+| `configs` | 1 to 8 configurations with unique names. |
+
+### Configuration fields
+
+A field that is absent keeps the CLI default.
+
+| Field | Maps to |
+|---|---|
+| `model` | `--model <value>` |
+| `claudeMd` (`{ "text" }` or `{ "file" }`) | `CLAUDE.md` of the clone, committed in the setup commit |
+| `appendSystemPrompt` | `--append-system-prompt <value>` |
+| `settings` (object or file) | `<run>/settings.json`, passed as `--settings`. Put hooks here. |
+| `skills` (directories) | Copied to `.claude/skills/<name>/` in the clone, committed in the setup commit |
+| `plugins` (directories) | `--plugin-dir <path>`, one per entry |
+| `permissionMode` | `--permission-mode`. One of `acceptEdits`, `auto`, `dontAsk`, `plan`. Default `auto`. `bypassPermissions` is refused. |
+| `allowedTools`, `disallowedTools` | `--allowedTools`, `--disallowedTools` |
+| `mcpConfig` (object or file) | `--mcp-config <path> --strict-mcp-config`. Without it, the runner passes an empty strict config. |
+| `bare` | `--bare`. It needs `ANTHROPIC_API_KEY`. Default false. |
+
+The runner always adds `-p` (prompt on stdin), `--output-format json`, `--session-id`, `--max-budget-usd`, `--permission-prompts none`, `--setting-sources project,local` and `--disallowedTools "Bash(git push:*)"`. The `--setting-sources` flag keeps your user hooks and plugins out of every configuration.
+
+### Budget
+
+- Each run gets `--max-budget-usd <perRunUsd>`.
+- The runner starts a run only when `spent + perRunUsd <= perEvalUsd`. The other runs get the status `skipped`, and they do not count in `n`.
+- The CLI can go a little over its cap on the last request.
+- Runs go in round-robin order over the configurations, one at a time.
+- A run over `task.timeoutSec` gets SIGTERM, then SIGKILL after 10 s. Its status is `timeout`. It is still scored and checked.
+
+### Isolation
+
+Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. It prints a warning if `git status` of the source repository changed during the eval. The runner removes each clone, unless you pass `--keep`.
+
+### Output
+
+Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, then the spec name.
+
+| Path | Content |
+|---|---|
+| `eval.json` | Spec, base SHA, CLI version, runs with their metrics, and the median, min, max and pass rate per configuration. |
+| `runs/<runId>/claude.json` | The CLI result. |
+| `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. |
+| `runs/<runId>/session.json` | The session file of the viewer. |
+| `runs/<runId>/diff.patch` | The final diff against the setup commit. |
+| `runs/<runId>/acceptance.log` | The last 64 KB of the acceptance output. |
+| `eval-runner/out/index.json` | The list of evals. |
+
+> **Warning:** the output holds your transcripts and the agent diffs. Do not commit or share it.
+
+### Known leaks
+
+- Without `bare`, the `~/.claude/CLAUDE.md` of the user and the user skills can still load into every configuration. The result records `claude --version`.
+- Only committed content is cloned. Uncommitted changes in the source repository are not part of the task.
+- The "→ session" link opens only if the build indexed that transcript, so the run must be inside the `--days` window.
+- In print mode, `interrupts` and `refusals` stay at 0, and the view hides a metric row where every run has 0.
 
 ## What the signals mean
 

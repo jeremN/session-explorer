@@ -1,0 +1,17 @@
+{
+	"name": "format-dollars",
+	"task": {
+		"repo": "../..",
+		"base": "HEAD",
+		"prompt": "Add and export a function formatDollars(value) to session-explorer/price.ts. It takes a number of dollars and returns a string with two decimals, a space and a dollar sign. formatDollars(1.5) returns \"1.50 $\". Add a test to session-explorer/price.test.ts and run `node --test session-explorer/price.test.ts`. Change no other file.",
+		"promptFile": null,
+		"timeoutSec": 900,
+		"acceptance": { "command": "node \"$EVAL_SPEC_DIR/check-format-dollars.ts\"", "timeoutSec": 120 }
+	},
+	"budget": { "perRunUsd": 1, "perEvalUsd": 6 },
+	"runs": 3,
+	"configs": [
+		{ "name": "baseline", "model": "sonnet" },
+		{ "name": "terse-claude-md", "model": "sonnet", "claudeMd": { "file": "terse.md" } }
+	]
+}
