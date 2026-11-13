@@ -141,6 +141,15 @@ The runner always adds `-p` (prompt on stdin), `--output-format json`, `--sessio
 
 Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. It prints a warning if `git status` of the source repository changed during the eval. The runner removes each clone, unless you pass `--keep`.
 
+Guards against an agent that tries to leave its clone:
+
+- The clone uses `--no-hardlinks`, so no object file is shared with the source repository.
+- The clone has a `pre-push` hook that fails. The agent process gets `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=protocol.allow` and `GIT_CONFIG_VALUE_0=never`, which turns off every git transport, a local path included. `Bash(git push:*)` stays disallowed, but it is a prefix rule, so `git -C . push` bypasses it.
+- The runner saves `.git/config` after the setup commit and restores it after the agent stops. Every git command after the agent runs with `core.fsmonitor`, `core.hooksPath` and the system and global config turned off, and `--no-ext-diff --no-textconv`.
+- The runner does not follow a symlink of the base commit when it writes `CLAUDE.md` or a skill.
+
+Residual risk: an agent with shell access can unset the environment variables and delete the hook. The isolation of the clone (no remote, no shared objects) is the main guard, not these rules.
+
 ### Output
 
 Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, then the spec name.

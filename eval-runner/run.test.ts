@@ -49,8 +49,8 @@ const writeSpec = (name: string, extra: Record<string, unknown> = {}) => {
 	);
 	return path;
 };
-const cli = (args: string[], env: Record<string, string> = {}) =>
-	realExec(process.execPath, [RUN, ...args], { env: { EVAL_RUNNER_PROJECTS_DIR: projects, TMPDIR: tmp, ...env }, timeoutMs: 60_000 });
+const cli = (args: string[], env: Record<string, string> = {}, cwd?: string) =>
+	realExec(process.execPath, [RUN, ...args], { cwd, env: { EVAL_RUNNER_PROJECTS_DIR: projects, TMPDIR: tmp, ...env }, timeoutMs: 60_000 });
 const evalDir = (out: string) => join(out, readdirSync(out).find((name) => name !== 'index.json')!);
 const clones = () => (existsSync(join(tmp, 'eval-runner')) ? readdirSync(join(tmp, 'eval-runner')).flatMap((id) => readdirSync(join(tmp, 'eval-runner', id))) : []);
 
@@ -171,4 +171,24 @@ test('the runner passes the argv and the prompt to the CLI, in the clone', async
 	const { args, cwd } = JSON.parse(readFileSync(argvFile, 'utf8'));
 	assert.ok(args.includes('--strict-mcp-config') && args.includes('--model'));
 	assert.match(cwd, /eval-runner\/.+\/baseline-1$/);
+});
+
+test('R2: a run with no CLI cost reserves its full cap, so the eval cap holds', async () => {
+	const out = join(root, 'out-r2');
+	const spec = writeSpec('nocost', { runs: 3, budget: { perRunUsd: 1, perEvalUsd: 2 }, task: { repo, prompt: 'x', timeoutSec: 1, acceptance: { command: 'true' } } });
+	const result = await cli([spec, '--claude', FAKE, '--out', out, '--only', 'baseline'], { FAKE_CLAUDE_MODE: 'sleep' });
+	assert.equal(result.code, 0, result.stderr);
+	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
+	assert.deepEqual(saved.runs.map((run: { status: string }) => run.status), ['timeout', 'timeout', 'skipped']);
+	assert.equal(saved.spent, 2);
+});
+
+test('R4/S3: a relative --out gives absolute paths in the argv, and the agent gets the git protocol env', async () => {
+	const argvFile = join(root, 'argv-r4.json');
+	const result = await cli([writeSpec('rel', { runs: 1 }), '--claude', FAKE, '--out', 'results', '--only', 'baseline'], { FAKE_CLAUDE_ARGV: argvFile }, root);
+	assert.equal(result.code, 0, result.stderr);
+	const { args, env } = JSON.parse(readFileSync(argvFile, 'utf8'));
+	assert.ok(args[args.indexOf('--mcp-config') + 1].startsWith('/'));
+	assert.deepEqual(env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' });
+	assert.ok(existsSync(join(root, 'results', 'index.json')));
 });

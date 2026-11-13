@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { buildCommand, setupFiles } from './command.ts';
 import { realExec } from './exec.ts';
@@ -46,7 +46,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 			if (!Number.isInteger(options.runs) || options.runs < 1 || options.runs > 20) throw new SpecError('--runs: required integer from 1 to 20');
 		} else if (flag === '--only') options.only = value().split(',');
 		else if (flag === '--claude') options.claude = value();
-		else if (flag === '--out') options.out = value();
+		else if (flag === '--out') options.out = resolve(value());
 		else if (flag.startsWith('-')) throw new SpecError(`${flag}: unknown option`);
 		else if (options.specPath) throw new SpecError(`${flag}: only one spec file is allowed`);
 		else options.specPath = flag;
@@ -86,12 +86,13 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
 	try {
-		const { setupSha } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, setup: setupFiles(planned.config) });
-		const { args, files } = buildCommand(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir });
+		const configBackup = join(runDir, 'git-config.bak');
+		const { setupSha } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, setup: setupFiles(planned.config), configBackup });
+		const { args, files, env } = buildCommand(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir });
 		for (const file of files) writeFileSync(file.path, file.content);
 
 		const started = Date.now();
-		const agent = await exec(options.claude, args, { cwd: clone, input: spec.task.prompt, timeoutMs: spec.task.timeoutSec * 1000 });
+		const agent = await exec(options.claude, args, { cwd: clone, input: spec.task.prompt, env, timeoutMs: spec.task.timeoutSec * 1000 });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
 		writeFileSync(join(runDir, 'claude.json'), agent.stdout);
 		let result: { is_error?: boolean; subtype?: string; total_cost_usd?: number } | undefined;
@@ -124,7 +125,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		}
 
 		// The diff is taken before the acceptance command, which can write files too.
-		const { patch, ...diff } = await collectDiff(exec, clone, setupSha);
+		const { patch, ...diff } = await collectDiff(exec, clone, setupSha, configBackup);
 		writeFileSync(join(runDir, 'diff.patch'), patch);
 		record.diff = diff;
 
@@ -213,7 +214,8 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		}
 		const { record, failed } = await runOne(context, run);
 		anyFailed ||= failed;
-		spent += record.cliCostUsd ?? record.metrics?.cost ?? spec.budget.perRunUsd;
+		// A run with no CLI cost (timeout, crash) reserves its full cap. The priced transcript cost is a separate metric.
+		spent += typeof record.cliCostUsd === 'number' && Number.isFinite(record.cliCostUsd) && record.cliCostUsd >= 0 ? record.cliCostUsd : spec.budget.perRunUsd;
 		runs.push(record);
 		console.log(`[${position + 1}/${planned.length}] ${run.id} ${record.status}, check ${record.acceptance?.passed ? 'passed' : 'failed'}, ${record.metrics?.cost ?? '?'} $, ${record.wallSec ?? '?'} s`);
 	}

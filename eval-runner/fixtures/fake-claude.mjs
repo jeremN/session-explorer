@@ -15,7 +15,7 @@ for await (const chunk of process.stdin) prompt += chunk;
 
 appendFileSync('agent-output.txt', `agent was here: ${prompt.trim()}\n`);
 // The argv goes to a file next to the clone, so a test can read what the runner passed.
-if (process.env.FAKE_CLAUDE_ARGV) writeFileSync(process.env.FAKE_CLAUDE_ARGV, JSON.stringify({ args, cwd: process.cwd() }));
+if (process.env.FAKE_CLAUDE_ARGV) writeFileSync(process.env.FAKE_CLAUDE_ARGV, JSON.stringify({ args, cwd: process.cwd(), env: { GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT, GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0, GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0 } }));
 const mode = process.env.FAKE_CLAUDE_MODE;
 if (mode !== 'notranscript') {
 	const projects = join(process.env.EVAL_RUNNER_PROJECTS_DIR, 'fake');

@@ -10,6 +10,9 @@ export type GeneratedFile = { path: string; content: string };
 const EMPTY_MCP = '{"mcpServers":{}}';
 // The agent has no remote in its clone. This ban is a second barrier.
 const ALWAYS_DISALLOWED = 'Bash(git push:*)';
+// The deny rule is a prefix rule: `git -C . push` or `env git push` bypass it. This environment turns off every git
+// transport for the agent, a local path included. An agent with a shell can still unset it, so the clone stays the main guard.
+export const AGENT_ENV: Record<string, string> = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' };
 
 export function buildCommand(config: Config, context: Context, readText: (path: string) => string = (path) => readFileSync(path, 'utf8')) {
 	const files: GeneratedFile[] = [];
@@ -33,7 +36,7 @@ export function buildCommand(config: Config, context: Context, readText: (path: 
 	args.push('--mcp-config', generated('mcp.json', config.mcpConfig, EMPTY_MCP), '--strict-mcp-config');
 	if (config.allowedTools?.length) args.push('--allowedTools', ...config.allowedTools);
 	args.push('--disallowedTools', ALWAYS_DISALLOWED, ...(config.disallowedTools ?? []));
-	return { args, files };
+	return { args, files, env: AGENT_ENV };
 }
 
 // What the runner writes into the clone before the setup commit.

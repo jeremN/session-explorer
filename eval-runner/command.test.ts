@@ -73,3 +73,7 @@ test('setupFiles lists the CLAUDE.md source and the skill directories for the se
 	assert.deepEqual(setupFiles({ name: 'a' }), { claudeMd: undefined, skills: [] });
 	assert.deepEqual(setupFiles({ name: 'a', claudeMd: { text: 'x' }, skills: ['/s/skills/x'] }), { claudeMd: { text: 'x' }, skills: ['/s/skills/x'] });
 });
+
+test('S3: the agent environment disables every git transport', () => {
+	assert.deepEqual(buildCommand({ name: 'a' }, context).env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' });
+});

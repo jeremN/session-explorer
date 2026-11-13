@@ -1,6 +1,6 @@
 // Session Explorer build: writes one index and one event file per Claude Code session.
 // Usage: node build.ts [--days 30] [--projects <regex>] [--waste] [--serve] [--port 4173]
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { basename, extname, join, resolve, sep } from 'node:path';
@@ -77,7 +77,13 @@ export function resolveRequest(url: string, viewerDir: string, outDir: string, e
 			? [evalDir, path.slice('/evals/'.length)]
 			: [viewerDir, path === '/' ? 'index.html' : path.slice(1)];
 	const file = resolve(root, relative);
-	return file.startsWith(resolve(root) + sep) ? file : undefined;
+	if (!file.startsWith(resolve(root) + sep)) return undefined;
+	// A symlink inside the root can point outside it. Compare the real paths when the file exists.
+	try {
+		return realpathSync(file).startsWith(realpathSync(root) + sep) ? file : undefined;
+	} catch {
+		return file;
+	}
 }
 
 // A web page can point its own domain at 127.0.0.1 (DNS rebinding). The Host header then names that domain.

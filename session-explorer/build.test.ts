@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { allowedHost, priceEvents, resolveRequest, summarizeSession } from './build.ts';
@@ -92,4 +95,25 @@ test('allowedHost accepts only the loopback names with the served port', () => {
 	assert.equal(allowedHost('127.0.0.1:9999', 4173), false);
 	assert.equal(allowedHost('127.0.0.1', 4173), false);
 	assert.equal(allowedHost(undefined, 4173), false);
+});
+
+test('resolveRequest refuses a symlink that leaves its root, in every root', () => {
+	const base = mkdtempSync(join(tmpdir(), 'resolve-'));
+	try {
+		const [viewer, out, evals, secret] = ['viewer', 'out', 'evals', 'secret'].map((name) => join(base, name));
+		for (const dir of [viewer, out, evals, secret]) mkdirSync(dir);
+		writeFileSync(join(secret, 'x.json'), '{}');
+		writeFileSync(join(evals, 'ok.json'), '{}');
+		for (const dir of [viewer, out, evals]) symlinkSync(secret, join(dir, 'link'));
+		symlinkSync(join(secret, 'x.json'), join(evals, 'file-link.json'));
+		const at = (url: string) => resolveRequest(url, viewer, out, evals);
+		assert.equal(at('/evals/link/x.json'), undefined);
+		assert.equal(at('/evals/file-link.json'), undefined);
+		assert.equal(at('/data/link/x.json'), undefined);
+		assert.equal(at('/link/x.json'), undefined);
+		assert.equal(at('/evals/ok.json'), join(evals, 'ok.json'));
+		assert.equal(at('/evals/missing.json'), join(evals, 'missing.json'));
+	} finally {
+		rmSync(base, { recursive: true, force: true });
+	}
 });
