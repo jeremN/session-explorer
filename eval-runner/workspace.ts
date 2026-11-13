@@ -14,7 +14,7 @@ const ENV = { GIT_TERMINAL_PROMPT: '0' };
 // After the agent started, everything in the clone is hostile, `.git` included: it can be a symlink, a `gitdir:` file,
 // or hold the config, hooks and attributes of the agent. So the runner never reads or writes the `.git` of the clone
 // again. It uses its own copy of the git dir, and these settings keep it from running code that the agent chose.
-const SAFE_CONFIG = ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat'];
+const SAFE_CONFIG = ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat', '-c', 'core.attributesFile=/dev/null'];
 // The runner environment must not redirect git either.
 const SAFE_ENV = { ...ENV, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined, GIT_OBJECT_DIRECTORY: undefined };
 
@@ -48,7 +48,8 @@ function refuseSymlinks(dir: string, relative: string) {
 	}
 }
 
-// `gitDir` is the copy of the git dir that the runner keeps outside the clone. collectDiff uses only that copy.
+// `gitDir` is the copy of the git dir that the runner keeps outside the clone, at a path the agent never gets.
+// collectDiff uses only that copy.
 export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, setup }: { repo: string; baseSha: string; dir: string; gitDir: string; setup: Setup }) {
 	mkdirSync(dirname(dir), { recursive: true });
 	// `--no-hardlinks`: a hard link would let a write in the clone reach the object files of the source repository.
@@ -79,24 +80,29 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	writeFileSync(hook, '#!/bin/sh\necho "eval-runner: push is disabled" >&2\nexit 1\n');
 	chmodSync(hook, 0o755);
 	const setupSha = (await git(exec, dir, ['rev-parse', 'HEAD'])).trim();
-	// The copy is taken before the agent starts, so its config, hooks and objects are the ones of the runner.
-	rmSync(gitDir, { recursive: true, force: true });
-	mkdirSync(dirname(gitDir), { recursive: true });
+	const fileMode = (await exec('git', ['config', '--bool', 'core.filemode'], { cwd: dir, env: ENV })).stdout.trim() !== 'false';
+	// The copy is taken before the agent starts, so its objects and refs are the ones of the runner.
+	mkdirSync(gitDir, { recursive: true, mode: 0o700 });
 	cpSync(join(dir, '.git'), gitDir, { recursive: true, dereference: false, verbatimSymlinks: true });
-	checkGitDir(gitDir);
-	return { setupSha };
+	chmodSync(gitDir, 0o700);
+	return { setupSha, fileMode };
 }
 
-// A `commondir` file or a config include would make git read files outside the runner copy.
-function checkGitDir(gitDir: string) {
+// Right before the diff, the runner replaces everything in its copy that can make git run code or read files elsewhere.
+// The config comes from memory, not from the disk, so a config written into the copy is lost.
+function lockGitDir(gitDir: string, fileMode: boolean) {
 	if (existsSync(join(gitDir, 'commondir'))) throw new Error(`${gitDir} has a commondir file`);
-	if (/^\s*\[\s*(include|includeIf)\b|worktreeConfig/im.test(readFileSync(join(gitDir, 'config'), 'utf8'))) throw new Error(`${gitDir}/config has an include or worktreeConfig`);
+	rmSync(join(gitDir, 'hooks'), { recursive: true, force: true });
+	// The whole info dir goes: info/attributes would apply filters, and rmSync never follows a symlink.
+	rmSync(join(gitDir, 'info'), { recursive: true, force: true });
+	rmSync(join(gitDir, 'config'), { force: true });
+	writeFileSync(join(gitDir, 'config'), `[core]\n\trepositoryformatversion = 0\n\tfilemode = ${fileMode}\n\tbare = false\n`);
 }
 
 // Never reads or writes the `.git` of the clone: git gets the runner copy and the clone as its work tree.
 // Git never adds an entry named `.git`, so the diff does not hold it.
-export async function collectDiff(exec: Exec, dir: string, setupSha: string, gitDir: string) {
-	checkGitDir(gitDir);
+export async function collectDiff(exec: Exec, dir: string, setupSha: string, gitDir: string, fileMode = true) {
+	lockGitDir(gitDir, fileMode);
 	const run = (args: string[]) => git(exec, dir, ['--git-dir', gitDir, '--work-tree', dir, ...args], true);
 	await run(['add', '-A']);
 	const numstat = await run(['diff', '--cached', '--no-ext-diff', '--no-textconv', '--numstat', setupSha]);

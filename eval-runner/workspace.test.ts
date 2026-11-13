@@ -218,7 +218,7 @@ test('F1: a config, filter, attribute or fsmonitor that the agent writes into th
 	await removeWorkspace(dir);
 });
 
-test('F1: collectDiff refuses a runner git dir with a commondir file or a config include', async () => {
+test('F1: collectDiff refuses a runner git dir with a commondir file, and drops a config include', async () => {
 	const dir = join(root, 'clones', 'f1d');
 	const gitDir = gitDirOf('f1d');
 	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: base, dir, gitDir, setup: plain });
@@ -226,7 +226,29 @@ test('F1: collectDiff refuses a runner git dir with a commondir file or a config
 	await assert.rejects(() => collectDiff(realExec, dir, setupSha, gitDir), /commondir/);
 	rmSync(join(gitDir, 'commondir'));
 	appendFileSync(join(gitDir, 'config'), '[include]\n\tpath = /elsewhere/config\n');
-	await assert.rejects(() => collectDiff(realExec, dir, setupSha, gitDir), /include/);
+	assert.equal((await collectDiff(realExec, dir, setupSha, gitDir)).files, 0);
+	assert.doesNotMatch(readFileSync(join(gitDir, 'config'), 'utf8'), /include/);
+	await removeWorkspace(dir);
+});
+
+test('G1: a config, hook or attribute written into the runner git dir before collectDiff never runs', async () => {
+	const dir = join(root, 'clones', 'g1b');
+	const gitDir = gitDirOf('g1b');
+	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: base, dir, gitDir, setup: plain });
+	const marker = join(root, 'g1b-marker');
+	const script = join(root, 'g1b-script.sh');
+	writeFileSync(script, `#!/bin/sh\ntouch ${marker}\ncat\n`);
+	chmodSync(script, 0o755);
+	appendFileSync(join(gitDir, 'config'), `[core]\n\tfsmonitor = ${script}\n[filter "x"]\n\tclean = ${script}\n`);
+	mkdirSync(join(gitDir, 'info'), { recursive: true });
+	writeFileSync(join(gitDir, 'info', 'attributes'), '* filter=x\n');
+	writeFileSync(join(dir, '.gitattributes'), '* filter=x\n');
+	writeFileSync(join(dir, 'a.txt'), 'one\nchanged\n');
+	const diff = await collectDiff(realExec, dir, setupSha, gitDir);
+	assert.equal(existsSync(marker), false);
+	assert.equal(diff.files, 2);
+	assert.match(diff.patch, /changed/);
+	assert.equal(existsSync(join(gitDir, 'hooks')), false);
 	await removeWorkspace(dir);
 });
 

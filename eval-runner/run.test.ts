@@ -192,3 +192,18 @@ test('R4/S3: a relative --out gives absolute paths in the argv, and the agent ge
 	assert.deepEqual(env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' });
 	assert.ok(existsSync(join(root, 'results', 'index.json')));
 });
+
+test('G1: the runner git dir is outside every path the agent gets, and it is gone after the run', async () => {
+	const out = join(root, 'out-g1');
+	const argvFile = join(root, 'argv-g1.json');
+	const result = await cli([writeSpec('g1', { runs: 1 }), '--claude', FAKE, '--out', out, '--only', 'baseline'], { FAKE_CLAUDE_ARGV: argvFile });
+	assert.equal(result.code, 0, result.stderr);
+	const seen = JSON.parse(readFileSync(argvFile, 'utf8'));
+	assert.deepEqual(seen.near, []);
+	assert.equal(seen.runnerGitDirs.length, 1);
+	const gitDir = seen.runnerGitDirs[0];
+	assert.ok(!seen.cwd.startsWith(gitDir));
+	for (const value of [...seen.args, ...Object.values(seen.fullEnv), ...seen.generated] as string[]) assert.ok(!value.includes(gitDir), value);
+	assert.equal(existsSync(gitDir), false);
+	assert.equal(existsSync(join(evalDir(out), 'runs', 'baseline-1', 'gitdir')), false);
+});

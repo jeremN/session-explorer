@@ -2,7 +2,7 @@
 // Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]
 // Exit codes: 0 done (or --help, or a dry run), 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -82,13 +82,16 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 	const sessionId = randomUUID();
 	const runDir = join(evalDir, 'runs', planned.id);
 	const clone = join(tmpdir(), 'eval-runner', evalId, planned.id);
-	// The runner copy of the git dir. It lives outside the clone, so the agent's work does not touch it.
-	const gitDir = join(runDir, 'gitdir');
+	// The runner copy of the git dir. Its path is random and the agent never gets it: not in the argv, the env, the cwd
+	// or a generated file.
+	let gitDir: string | undefined;
 	mkdirSync(runDir, { recursive: true });
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
 	try {
-		const { setupSha } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
+		gitDir = mkdtempSync(join(tmpdir(), 'eval-runner-git-'));
+		chmodSync(gitDir, 0o700);
+		const { setupSha, fileMode } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
 		const { args, files, env } = buildCommand(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir });
 		for (const file of files) writeFileSync(file.path, file.content);
 
@@ -126,7 +129,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		}
 
 		// The diff is taken before the acceptance command, which can write files too.
-		const { patch, ...diff } = await collectDiff(exec, clone, setupSha, gitDir);
+		const { patch, ...diff } = await collectDiff(exec, clone, setupSha, gitDir, fileMode);
+		await removeWorkspace(gitDir);
 		writeFileSync(join(runDir, 'diff.patch'), patch);
 		record.diff = diff;
 
@@ -140,10 +144,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		console.error(`${planned.id}: ${record.note}`);
 		failed = true;
 	} finally {
-		if (!options.keep) {
-			await removeWorkspace(clone);
-			await removeWorkspace(gitDir);
-		}
+		if (gitDir) await removeWorkspace(gitDir);
+		if (!options.keep) await removeWorkspace(clone);
 	}
 	return { record, failed };
 }

@@ -6,7 +6,7 @@ export type ExecResult = { code: number | null; stdout: string; stderr: string; 
 export type Exec = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
 
 const KILL_GRACE_MS = 10_000;
-// After the SIGKILL, the wait for the process group to go away stops at this limit.
+// After the SIGKILL, the wait for the process group and for the pipes stops at this limit.
 const GROUP_WAIT_MS = 5_000;
 const POLL_MS = 50;
 
@@ -28,8 +28,9 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 		let stdout = '';
 		let stderr = '';
 		let timedOut = false;
-		let killed = false;
+		let killedAt: number | undefined;
 		let killTimer: NodeJS.Timeout | undefined;
+		let forceTimer: NodeJS.Timeout | undefined;
 		const signal = (name: NodeJS.Signals) => {
 			try {
 				process.kill(-child.pid!, name);
@@ -45,8 +46,14 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 						signal('SIGTERM');
 						// This SIGKILL stays scheduled after the parent closes: a descendant can ignore SIGTERM and outlive it.
 						killTimer = setTimeout(() => {
-							killed = true;
+							killedAt = Date.now();
 							signal('SIGKILL');
+							// A descendant in another session can keep the pipes open, so close never comes. The result stops waiting.
+							forceTimer = setTimeout(() => {
+								child.stdout.destroy();
+								child.stderr.destroy();
+								finish(child.exitCode, '\neval-runner: a descendant kept the output open after the kill');
+							}, GROUP_WAIT_MS);
 						}, killGraceMs);
 					}, timeoutMs);
 		child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
@@ -61,14 +68,10 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 			// On a timeout, the result waits until the whole group is gone: the SIGKILL comes after the grace period at most.
 			if (timedOut && child.pid !== undefined) {
 				const pid = child.pid;
-				let deadline = Infinity;
-				while (groupAlive(pid)) {
-					if (killed && deadline === Infinity) deadline = Date.now() + GROUP_WAIT_MS;
-					if (Date.now() > deadline) break;
-					await new Promise((wake) => setTimeout(wake, POLL_MS));
-				}
+				while (groupAlive(pid) && (killedAt === undefined || Date.now() < killedAt + GROUP_WAIT_MS)) await new Promise((wake) => setTimeout(wake, POLL_MS));
 			}
 			clearTimeout(killTimer);
+			clearTimeout(forceTimer);
 			resolve({ code, stdout, stderr: stderr + extra, timedOut });
 		};
 		child.on('error', (error) => finish(null, error.message));
