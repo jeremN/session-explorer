@@ -1,6 +1,6 @@
 // One throwaway clone per run. The clone has no remote, so nothing the agent does reaches the source repository.
 // The source repository is read by `clone`, `rev-parse` and `status` only.
-import { chmodSync, copyFileSync, cpSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import type { Exec } from './exec.ts';
@@ -11,10 +11,12 @@ type Setup = { claudeMd: Config['claudeMd']; skills: string[] };
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 const ENV = { GIT_TERMINAL_PROMPT: '0' };
 
-// After the agent ran, the clone is hostile: its config, hooks and attributes belong to the agent.
-// These settings keep the runner from running code that the agent chose.
+// After the agent started, everything in the clone is hostile, `.git` included: it can be a symlink, a `gitdir:` file,
+// or hold the config, hooks and attributes of the agent. So the runner never reads or writes the `.git` of the clone
+// again. It uses its own copy of the git dir, and these settings keep it from running code that the agent chose.
 const SAFE_CONFIG = ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat'];
-const SAFE_ENV = { ...ENV, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+// The runner environment must not redirect git either.
+const SAFE_ENV = { ...ENV, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined, GIT_OBJECT_DIRECTORY: undefined };
 
 async function git(exec: Exec, cwd: string, args: string[], safe = false) {
 	const result = await exec('git', safe ? [...SAFE_CONFIG, ...args] : args, { cwd, env: safe ? SAFE_ENV : ENV });
@@ -32,10 +34,10 @@ export async function sourceStatus(exec: Exec, repo: string): Promise<string> {
 	return (await git(exec, repo, ['status', '--porcelain'])).trimEnd();
 }
 
-// The base commit is not trusted: a path in it can be a symlink to a file outside the clone.
+// The base commit is not trusted: a parent directory in it can be a symlink to a directory outside the clone.
 function refuseSymlinks(dir: string, relative: string) {
 	let path = dir;
-	for (const part of relative.split('/')) {
+	for (const part of relative.split('/').slice(0, -1)) {
 		path = join(path, part);
 		try {
 			if (lstatSync(path).isSymbolicLink()) throw new Error(`${relative} passes through a symlink in the base commit`);
@@ -46,7 +48,8 @@ function refuseSymlinks(dir: string, relative: string) {
 	}
 }
 
-export async function createWorkspace(exec: Exec, { repo, baseSha, dir, setup, configBackup }: { repo: string; baseSha: string; dir: string; setup: Setup; configBackup?: string }) {
+// `gitDir` is the copy of the git dir that the runner keeps outside the clone. collectDiff uses only that copy.
+export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, setup }: { repo: string; baseSha: string; dir: string; gitDir: string; setup: Setup }) {
 	mkdirSync(dirname(dir), { recursive: true });
 	// `--no-hardlinks`: a hard link would let a write in the clone reach the object files of the source repository.
 	await git(exec, dirname(dir), ['clone', '--local', '--no-hardlinks', '--no-checkout', repo, dir]);
@@ -60,6 +63,9 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, setup, c
 	for (const skill of setup.skills) {
 		const target = `.claude/skills/${basename(skill)}`;
 		refuseSymlinks(dir, target);
+		// The destination can exist in the base commit, as a symlink or with symlinks in it. rmSync removes a symlink
+		// without following it, so the copy never writes through one.
+		rmSync(join(dir, target), { recursive: true, force: true });
 		cpSync(skill, join(dir, target), { recursive: true, dereference: false, verbatimSymlinks: true });
 	}
 	// The diff of the run is measured against this commit, so the configuration files never count as agent work.
@@ -72,20 +78,29 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, setup, c
 	rmSync(hook, { force: true });
 	writeFileSync(hook, '#!/bin/sh\necho "eval-runner: push is disabled" >&2\nexit 1\n');
 	chmodSync(hook, 0o755);
-	// The agent controls .git/config. collectDiff restores this copy before it runs any git command.
-	if (configBackup) copyFileSync(join(dir, '.git', 'config'), configBackup);
-	return { setupSha: (await git(exec, dir, ['rev-parse', 'HEAD'])).trim() };
+	const setupSha = (await git(exec, dir, ['rev-parse', 'HEAD'])).trim();
+	// The copy is taken before the agent starts, so its config, hooks and objects are the ones of the runner.
+	rmSync(gitDir, { recursive: true, force: true });
+	mkdirSync(dirname(gitDir), { recursive: true });
+	cpSync(join(dir, '.git'), gitDir, { recursive: true, dereference: false, verbatimSymlinks: true });
+	checkGitDir(gitDir);
+	return { setupSha };
 }
 
-export async function collectDiff(exec: Exec, dir: string, setupSha: string, configBackup?: string) {
-	// This removes every filter, textconv, fsmonitor and include that the agent set.
-	if (configBackup) {
-		rmSync(join(dir, '.git', 'config'), { force: true });
-		copyFileSync(configBackup, join(dir, '.git', 'config'));
-	}
-	await git(exec, dir, ['add', '-A'], true);
-	const numstat = await git(exec, dir, ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--numstat', setupSha], true);
-	const patch = await git(exec, dir, ['diff', '--cached', '--no-ext-diff', '--no-textconv', setupSha], true);
+// A `commondir` file or a config include would make git read files outside the runner copy.
+function checkGitDir(gitDir: string) {
+	if (existsSync(join(gitDir, 'commondir'))) throw new Error(`${gitDir} has a commondir file`);
+	if (/^\s*\[\s*(include|includeIf)\b|worktreeConfig/im.test(readFileSync(join(gitDir, 'config'), 'utf8'))) throw new Error(`${gitDir}/config has an include or worktreeConfig`);
+}
+
+// Never reads or writes the `.git` of the clone: git gets the runner copy and the clone as its work tree.
+// Git never adds an entry named `.git`, so the diff does not hold it.
+export async function collectDiff(exec: Exec, dir: string, setupSha: string, gitDir: string) {
+	checkGitDir(gitDir);
+	const run = (args: string[]) => git(exec, dir, ['--git-dir', gitDir, '--work-tree', dir, ...args], true);
+	await run(['add', '-A']);
+	const numstat = await run(['diff', '--cached', '--no-ext-diff', '--no-textconv', '--numstat', setupSha]);
+	const patch = await run(['diff', '--cached', '--no-ext-diff', '--no-textconv', setupSha]);
 	let files = 0;
 	let added = 0;
 	let deleted = 0;

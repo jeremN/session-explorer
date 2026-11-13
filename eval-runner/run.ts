@@ -82,12 +82,13 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 	const sessionId = randomUUID();
 	const runDir = join(evalDir, 'runs', planned.id);
 	const clone = join(tmpdir(), 'eval-runner', evalId, planned.id);
+	// The runner copy of the git dir. It lives outside the clone, so the agent's work does not touch it.
+	const gitDir = join(runDir, 'gitdir');
 	mkdirSync(runDir, { recursive: true });
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
 	try {
-		const configBackup = join(runDir, 'git-config.bak');
-		const { setupSha } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, setup: setupFiles(planned.config), configBackup });
+		const { setupSha } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
 		const { args, files, env } = buildCommand(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir });
 		for (const file of files) writeFileSync(file.path, file.content);
 
@@ -125,7 +126,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		}
 
 		// The diff is taken before the acceptance command, which can write files too.
-		const { patch, ...diff } = await collectDiff(exec, clone, setupSha, configBackup);
+		const { patch, ...diff } = await collectDiff(exec, clone, setupSha, gitDir);
 		writeFileSync(join(runDir, 'diff.patch'), patch);
 		record.diff = diff;
 
@@ -139,7 +140,10 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		console.error(`${planned.id}: ${record.note}`);
 		failed = true;
 	} finally {
-		if (!options.keep) await removeWorkspace(clone);
+		if (!options.keep) {
+			await removeWorkspace(clone);
+			await removeWorkspace(gitDir);
+		}
 	}
 	return { record, failed };
 }

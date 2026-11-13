@@ -145,10 +145,11 @@ Guards against an agent that tries to leave its clone:
 
 - The clone uses `--no-hardlinks`, so no object file is shared with the source repository.
 - The clone has a `pre-push` hook that fails. The agent process gets `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=protocol.allow` and `GIT_CONFIG_VALUE_0=never`, which turns off every git transport, a local path included. `Bash(git push:*)` stays disallowed, but it is a prefix rule, so `git -C . push` bypasses it.
-- The runner saves `.git/config` after the setup commit and restores it after the agent stops. Every git command after the agent runs with `core.fsmonitor`, `core.hooksPath` and the system and global config turned off, and `--no-ext-diff --no-textconv`.
-- The runner does not follow a symlink of the base commit when it writes `CLAUDE.md` or a skill.
+- After the setup commit and before the agent starts, the runner copies `.git` of the clone to `runs/<runId>/gitdir`. After the agent stops, the runner never reads or writes `.git` of the clone: the agent can make it a symlink, a `gitdir:` file, or fill it with its own config, hooks and attributes. The diff runs as `git --git-dir=<runner copy> --work-tree=<clone>`, with `core.fsmonitor`, `core.hooksPath` and the system and global config turned off, and `--no-ext-diff --no-textconv`. The runner refuses a copy that has a `commondir` file or a config include. The runner removes the copy with the clone, unless you pass `--keep`.
+- On a timeout, the runner sends SIGTERM to the process group of the agent, then SIGKILL after 10 seconds. It waits until the group is gone before the acceptance command starts.
+- The runner does not follow a symlink of the base commit when it writes `CLAUDE.md` or a skill. It refuses a skill path whose parent directory is a symlink, and it removes an existing skill directory before the copy.
 
-Residual risk: an agent with shell access can unset the environment variables and delete the hook. The isolation of the clone (no remote, no shared objects) is the main guard, not these rules.
+Residual risk: an agent with shell access can unset the environment variables and delete the hook. It can also use absolute paths to reach files outside the clone; the permission system of the CLI is the guard for that, not the runner. The acceptance command runs code from the clone by design. The isolation of the clone (no remote, no shared objects, a git dir that the runner owns) is the main guard.
 
 ### Output
 
