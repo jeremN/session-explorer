@@ -212,3 +212,33 @@ test('a prompt event carries its text on one line, cut at 500 characters', () =>
 	assert.equal(session?.events[0].msg, 'fix the cart the total is wrong');
 	assert.equal(session?.events[1].msg, `${'y'.repeat(499)}…`);
 });
+
+test('a user interruption is an interrupt event of the main agent', () => {
+	const stop = (minute: number, text: string) => ({ type: 'user', timestamp: at(minute), message: { content: [{ type: 'text', text }] } });
+	const session = parseSession([
+		prompt(0),
+		assistant(1, 'msg_1', [call('t1', 'Bash', { command: 'ls' })]),
+		stop(2, '[Request interrupted by user]'),
+		stop(3, '[Request interrupted by user for tool use]\n'),
+		stop(4, 'some other text block')
+	]);
+	assert.deepEqual(
+		session?.events.map((event) => [event.kind, event.agent]),
+		[['prompt', 0], ['llm', 0], ['tool', 0], ['interrupt', 0], ['interrupt', 0]]
+	);
+});
+
+test('a refused call carries who refused it: the user or the permission system', () => {
+	const session = parseSession([
+		assistant(1, 'msg_1', [call('t1', 'Bash', { command: 'rm -rf dist' }), call('t2', 'Bash', { command: 'git push' }), call('t3', 'Bash', { command: 'ls nope' }), call('t4', 'Bash', { command: 'git reset --hard' }), call('t5', 'Bash', { command: 'cd /x && make' })]),
+		result(2, 't1', "The user doesn't want to proceed with this tool use. The tool use was rejected."),
+		result(2, 't2', 'Permission to use Bash has been denied because the action is outside the task.'),
+		result(2, 't3', 'ls: nope: No such file or directory'),
+		result(2, 't4', 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Destructive].'),
+		result(2, 't5', 'Permission to use Bash with command cd /x && make has been denied.')
+	]);
+	assert.deepEqual(
+		session?.events.filter((event) => event.kind === 'error').map((event) => event.refusal),
+		['user', 'system', undefined, 'system', 'system']
+	);
+});

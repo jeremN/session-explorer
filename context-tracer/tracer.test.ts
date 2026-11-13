@@ -182,8 +182,8 @@ test('traceTasks: a task carries its end and the time of each first event', () =
 		toolUse(14, 'Read', { file_path: `${REPO}/src/b.ts` })
 	]);
 	assert.deepEqual(tasks, [
-		{ start: at(0), end: at(10), brain: 'before', memory: true, editAt: at(5), brainAt: at(2), memoryAt: at(1) },
-		{ start: at(10), end: at(14), brain: 'never', memory: false, editAt: at(12) }
+		{ start: at(0), end: at(10), brain: 'before', memory: true, editAt: at(5), brainAt: at(2), memoryAt: at(1), verified: false },
+		{ start: at(10), end: at(14), brain: 'never', memory: false, editAt: at(12), verified: false }
 	]);
 });
 
@@ -207,4 +207,25 @@ test('an edit anywhere in a brain repository is not a task; a read outside its s
 	} finally {
 		configureKnowledge(CONFIG);
 	}
+});
+
+test('a test, build, lint or typecheck command is a verify event', () => {
+	for (const command of ['npm test', 'pnpm run build', 'yarn lint', 'npx tsc --noEmit', 'node --test', 'pnpm vitest run src/a.test.ts', 'cd app && npm run typecheck', 'pytest -q', 'cargo test', 'go test ./...', 'npx svelte-check', 'npx playwright test'])
+		assert.equal(classify('Bash', { command }), 'verify', command);
+	for (const command of ['git status', 'npm install', 'cat package.json', 'echo test', 'grep -rn test src'])
+		assert.equal(classify('Bash', { command }), undefined, command);
+});
+
+test('traceTasks: a task is verified when a check runs after its last edit', () => {
+	const check = (minute: number) => toolUse(minute, 'Bash', { command: 'npm test' });
+	const { tasks } = traceTasks([
+		prompt(0), repoEdit(1), check(2),
+		prompt(10, 'next'), repoEdit(11), check(12), repoEdit(13),
+		prompt(20, 'last'), repoEdit(21)
+	]);
+	assert.deepEqual(tasks.map(({ verified, verifiedAt }) => ({ verified, verifiedAt })), [
+		{ verified: true, verifiedAt: at(2) },
+		{ verified: false, verifiedAt: undefined },
+		{ verified: false, verifiedAt: undefined }
+	]);
 });

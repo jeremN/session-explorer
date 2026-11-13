@@ -28,7 +28,7 @@ export function priceEvents(events: SessionEvent[], rates: Record<string, Rate> 
 	return events.map((event) => (event.kind === 'llm' && event.tok ? { ...event, cost: costOf(event.model ?? '', event.tok, rates) } : event));
 }
 
-export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain'>>) {
+export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain' | 'verified'>>) {
 	const requests = parsed.events.filter((event) => event.kind === 'llm' && event.tok);
 	const sum = (pick: (event: SessionEvent) => number) => requests.reduce((total, event) => total + pick(event), 0);
 	const fresh = sum((event) => event.tok!.fresh);
@@ -37,6 +37,7 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 	const output = sum((event) => event.tok!.out);
 	const input = fresh + written + read;
 	const verdicts = (verdict: TaskSpan['brain']) => tasks.filter((task) => task.brain === verdict).length;
+	const count = (keep: (event: SessionEvent) => boolean) => parsed.events.filter(keep).length;
 	return {
 		id,
 		project,
@@ -50,9 +51,12 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 		unpricedRequests: requests.filter((event) => event.cost == null).length,
 		billedTokens: fresh + written + output,
 		cacheReadShare: input === 0 ? 0 : Math.round((read / input) * 100) / 100,
-		errors: parsed.events.filter((event) => event.kind === 'error').length,
+		errors: count((event) => event.kind === 'error'),
+		interrupts: count((event) => event.kind === 'interrupt'),
+		refusals: count((event) => event.refusal === 'user'),
+		denials: count((event) => event.refusal === 'system'),
 		subagents: parsed.agents.length,
-		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never') },
+		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never'), verified: tasks.filter((task) => task.verified).length },
 		mrs: [] as string[]
 	};
 }

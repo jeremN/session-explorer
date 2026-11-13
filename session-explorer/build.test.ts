@@ -29,14 +29,17 @@ test('summarizeSession: one index row', () => {
 		{ ...llm(10, 'model-a', 1000, 200, 3000), cost: 1.234 },
 		tool(20, 'error'),
 		{ ...llm(30, 'opus', 0, 100, 0), cost: null },
+		{ ...tool(40, 'error'), refusal: 'user' as const },
+		{ ...tool(50, 'error'), refusal: 'system' as const },
+		tool(60, 'interrupt'),
 		tool(90.4, 'edit')
 	];
 	const parsed = { title: 'Fix the cart', start: '2026-10-05T08:00:00.000Z', branch: 'feat-1/x', agents: [{ id: 'a1', name: 'Explore' }], events };
 	const span = { start: '', end: '', memory: false, editAt: '' };
 	const tasks = [
-		{ ...span, brain: 'before' as const },
-		{ ...span, brain: 'never' as const },
-		{ ...span, brain: 'never' as const }
+		{ ...span, brain: 'before' as const, verified: true },
+		{ ...span, brain: 'never' as const, verified: false },
+		{ ...span, brain: 'never' as const, verified: true }
 	];
 	assert.deepEqual(summarizeSession('abc', 'proj', parsed, tasks), {
 		id: 'abc',
@@ -45,15 +48,18 @@ test('summarizeSession: one index row', () => {
 		title: 'Fix the cart',
 		start: '2026-10-05T08:00:00.000Z',
 		activeSec: 90,
-		events: 5,
+		events: 8,
 		llmRequests: 2,
 		cost: 1.23,
 		unpricedRequests: 1,
 		billedTokens: 1300,
 		cacheReadShare: 0.75,
-		errors: 1,
+		errors: 3,
+		interrupts: 1,
+		refusals: 1,
+		denials: 1,
 		subagents: 1,
-		tasks: { before: 1, after: 0, never: 2 },
+		tasks: { before: 1, after: 0, never: 2, verified: 2 },
 		mrs: []
 	});
 });

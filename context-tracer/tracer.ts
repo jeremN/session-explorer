@@ -7,8 +7,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export type TaskTrace = { start: string; brain: 'before' | 'after' | 'never'; memory: boolean };
-export type TaskSpan = TaskTrace & { end: string; editAt: string; brainAt?: string; memoryAt?: string };
-type EventKind = 'brain' | 'memory' | 'edit';
+// `verified`: a test, build, lint or typecheck command ran after the last edit of the task.
+export type TaskSpan = TaskTrace & { end: string; editAt: string; brainAt?: string; memoryAt?: string; verified: boolean; verifiedAt?: string };
+type EventKind = 'brain' | 'memory' | 'edit' | 'verify';
 type Counts = { tasks: number; before: number; after: number; never: number; memory: number };
 
 // The knowledge base ("brain") is set in the config file. Without it, only an unscoped qmd search counts as a brain search.
@@ -54,6 +55,20 @@ const HEREDOC = /<<-?\s*["']?(\w+)["']?[\s\S]*?(?:\n\1(?=\s|$)|$)/g;
 const SHELL_READER = /(?:^|\|)\s*(?:grep|rg|cat)\b/;
 const SHELL_IN_PLACE = /\bsed\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*i(?=[\s.']|$)|\bperl\s+(?:-\S+\s+)*-[a-zA-Z0-9]*i(?=[\s.]|$)/;
 
+// A statement that starts with one of these commands checks the code. Leading `VAR=value` assignments are skipped.
+const VERIFY = new RegExp(
+	'^(?:\\w+=\\S*\\s+)*(?:' +
+		[
+			'(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:test|build|lint|check|typecheck|type-check)\\b',
+			'(?:npx|bunx|pnpm\\s+exec|pnpm|yarn)\\s+(?:tsc|vitest|jest|eslint|svelte-check|playwright\\s+test)\\b',
+			'(?:tsc|vitest|jest|eslint|pytest|mypy|ruff)\\b',
+			'node\\s+--test\\b',
+			'cargo\\s+(?:test|check|build|clippy)\\b',
+			'go\\s+(?:test|build|vet)\\b'
+		].join('|') +
+		')'
+);
+
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 
 function knowledgeSource(collections: string[]): EventKind | undefined {
@@ -76,7 +91,8 @@ function classifyShell(rawCommand: string): EventKind | undefined {
 	const statements = command.split(/;|&&|\|\||\n/).map((statement) => statement.trim().replace(/^(?:do|then)\s+/, ''));
 	if (shellReads(statements, knowledge.brainPath)) return 'brain';
 	if (shellReads(statements, MEMORY_PATH)) return 'memory';
-	return SHELL_IN_PLACE.test(command) && !knowledge.shellNotARepository.test(command) ? 'edit' : undefined;
+	if (SHELL_IN_PLACE.test(command) && !knowledge.shellNotARepository.test(command)) return 'edit';
+	return statements.some((statement) => VERIFY.test(statement)) ? 'verify' : undefined;
 }
 
 export function classify(name: string, input: Record<string, unknown>): EventKind | undefined {
@@ -132,11 +148,12 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 	events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
 	const tasks: TaskSpan[] = [];
-	type OpenTask = { start: string; brain?: string; memory?: string; edit?: string };
+	type OpenTask = { start: string; brain?: string; memory?: string; edit?: string; lastEdit?: string; verify?: string };
 	let open: OpenTask | undefined;
 	const close = (end: string) => {
 		if (open?.edit === undefined) return;
-		const { brain, memory, edit } = open;
+		const { brain, memory, edit, lastEdit = edit, verify } = open;
+		const verified = verify !== undefined && verify >= lastEdit;
 		tasks.push({
 			start: open.start,
 			end,
@@ -144,7 +161,9 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 			memory: memory !== undefined && memory < edit,
 			editAt: edit,
 			...(brain === undefined ? {} : { brainAt: brain }),
-			...(memory === undefined ? {} : { memoryAt: memory })
+			...(memory === undefined ? {} : { memoryAt: memory }),
+			verified,
+			...(verified ? { verifiedAt: verify } : {})
 		});
 		open = undefined;
 	};
@@ -155,7 +174,9 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 			continue;
 		}
 		open ??= { start: timestamp };
-		open[kind] ??= timestamp;
+		if (kind === 'verify') open.verify = timestamp;
+		else open[kind] ??= timestamp;
+		if (kind === 'edit') open.lastEdit = timestamp;
 	}
 	close(last);
 	return { start, tasks };

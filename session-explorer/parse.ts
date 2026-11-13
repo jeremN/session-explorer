@@ -2,7 +2,7 @@
 import { classify, isUserPrompt } from '../context-tracer/tracer.ts';
 import type { Tokens } from './price.ts';
 
-export type Kind = 'prompt' | 'llm' | 'tool' | 'edit' | 'error' | 'subagent';
+export type Kind = 'prompt' | 'llm' | 'tool' | 'edit' | 'error' | 'subagent' | 'interrupt';
 export type SessionEvent = {
 	t: string;
 	ta: number;
@@ -13,6 +13,8 @@ export type SessionEvent = {
 	node?: string;
 	mark?: 'brain' | 'memory';
 	msg?: string;
+	// On an error: the user refused the call, or the permission system denied it.
+	refusal?: 'user' | 'system';
 	model?: string;
 	tok?: Tokens;
 	cost?: number | null;
@@ -35,6 +37,10 @@ const TEXT_LIMIT = 200;
 const TITLE_LIMIT = 80;
 const PROMPT_LIMIT = 500;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
+const INTERRUPT = /^\[Request interrupted by user/;
+const USER_REFUSAL = /^The user doesn't want to (?:proceed|take this action)/;
+// The message can be cut at 200 characters, so only its start is matched.
+const SYSTEM_DENIAL = /^Permission (?:to use |for this (?:action|command) was denied)/;
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 export const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
@@ -134,12 +140,18 @@ export function parseSession(entries: unknown[], subagents: Record<string, Agent
 				callById.set(text(block.id), draft);
 			}
 		} else if (entry.type === 'user') {
+			if (!entry.isSidechain && content.some((block) => block?.type === 'text' && INTERRUPT.test(text(block.text)))) {
+				drafts.push({ t, kind: 'interrupt', agent: 0 });
+				continue;
+			}
 			for (const block of content) {
 				if (block?.type !== 'tool_result' || !block.is_error) continue;
 				const failed = callById.get(text(block.tool_use_id));
 				if (!failed) continue;
 				failed.kind = 'error';
 				failed.msg = firstLine(block.content);
+				const refusal = USER_REFUSAL.test(failed.msg) ? 'user' : SYSTEM_DENIAL.test(failed.msg) ? 'system' : undefined;
+				if (refusal) failed.refusal = refusal;
 			}
 		}
 	}
