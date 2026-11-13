@@ -1,0 +1,66 @@
+/* UI kit of the viewer: design tokens and reusable primitives.
+   The look follows TuffUI (tuffui.com, MIT): depth comes from tonal steps, not from borders or shadows.
+   Page -> Panel (--surface) -> Inset (--inset). Nested radii: outer radius = inner radius + padding.
+   Each token is defined three times: dark default, system light, forced light. Keep the three blocks in sync.
+   The timeline canvas and the d3 map read some tokens with getComputedStyle: do not rename them. */
+:root{
+  color-scheme:dark;
+  --bg:#0b0b0a; --surface:#161615; --raise:#1f1f1d; --inset:rgba(255,255,255,.045); --thumb:#2b2b29;
+  --ink:#f0efec; --ink2:#c3c2b7; --muted:#8d8b84;
+  --grid:#2c2c2a; --axis:#3d3d3a; --line:rgba(255,255,255,.09);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --crit:#d03b3b; --crit-text:#ef7774;
+  --positive:#5cc98f; --warning:#e3a548;
+  --r-panel:6px; --r-inset:4px; --r-pill:3px;
+  --font-ui:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --bg:#ecebe6; --surface:#fcfcfb; --raise:#f0efea; --inset:rgba(11,11,11,.04); --thumb:#fcfcfb;
+    --ink:#0b0b0b; --ink2:#52514e; --muted:#6d6b65;
+    --grid:#e6e5de; --axis:#c3c2b7; --line:rgba(11,11,11,.10);
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+    --crit:#d03b3b; --crit-text:#b02a2a;
+    --positive:#1a7f52; --warning:#96580a;
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#ecebe6; --surface:#fcfcfb; --raise:#f0efea; --inset:rgba(11,11,11,.04); --thumb:#fcfcfb;
+  --ink:#0b0b0b; --ink2:#52514e; --muted:#6d6b65;
+  --grid:#e6e5de; --axis:#c3c2b7; --line:rgba(11,11,11,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --crit:#d03b3b; --crit-text:#b02a2a;
+  --positive:#1a7f52; --warning:#96580a;
+}
+
+/* Surface: a panel sits on the page, an inset sits in a panel. */
+.panel{background:var(--surface);border:0;border-radius:var(--r-panel);padding:14px}
+.inset{background:var(--inset);border:0;border-radius:var(--r-inset)}
+
+/* Segmented control: a group of buttons with one sliding thumb under the pressed button.
+   ui.mjs adds the thumb and moves it. A group with no pressed button shows no thumb. */
+.seg{position:relative;display:inline-flex;align-items:center;gap:2px;padding:3px;border-radius:calc(var(--r-inset) + 3px);background:var(--inset)}
+.seg>button{position:relative;z-index:1;min-height:28px;min-width:28px;padding:0 10px;border:0;border-radius:var(--r-inset);background:none;color:var(--ink2);font:500 12px var(--font-mono);cursor:pointer;transition:color .15s}
+.seg>button:hover{color:var(--ink)}
+.seg>button[aria-pressed="true"]{color:var(--ink)}
+.seg>button:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.seg-thumb{position:absolute;top:3px;bottom:3px;left:0;width:var(--w,0);transform:translateX(var(--x,0));border-radius:var(--r-inset);background:var(--thumb);box-shadow:0 1px 2px rgba(0,0,0,.12);transition:transform .2s cubic-bezier(.3,.7,.2,1),width .2s cubic-bezier(.3,.7,.2,1)}
+@media (prefers-reduced-motion:reduce){.seg-thumb{transition:none}}
+
+/* Status pill: a tone, a dot, a short label. The label carries the meaning; the colour only repeats it. */
+.pill{--tone:var(--muted);display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:2px 8px;border-radius:var(--r-pill);background:color-mix(in oklab,var(--tone) 14%,transparent);color:var(--tone);font:500 11px/1.5 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill[data-tone="positive"]{--tone:var(--positive)}
+.pill[data-tone="warning"]{--tone:var(--warning)}
+.pill[data-tone="negative"]{--tone:var(--crit-text)}
+.pill[data-tone="info"]{--tone:var(--s1)}
+.pill[data-tone="neutral"]{--tone:var(--ink2)}
+
+/* Stat grid: one tile per figure, label above, value in mono. */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:6px}
+.stat{min-width:0;padding:10px 12px;border-radius:var(--r-inset);background:var(--surface)}
+.stat dt{font:500 10.5px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-wrap:balance}
+.stat dd{margin:4px 0 0;font:500 18px var(--font-mono);font-variant-numeric:tabular-nums}
