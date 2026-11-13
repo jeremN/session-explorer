@@ -151,6 +151,8 @@ Guards against an agent that tries to leave its clone:
 
 Residual risk: a process that the agent detaches into its own session leaves the process group, so the timeout does not kill it. It can outlive the run and overlap the acceptance command of the run and the next runs. The runner cannot contain it without an OS boundary. For an untrusted task, run the eval in a container, in a VM or as a dedicated user.
 
+Known limit: the runner cleans the process group when the output of the agent closes, not when the agent exits. If the agent leaves a child in its group that keeps the output open, the runner waits until the timeout. The run then shows `timedOut: true` with an exit code of 0, and it counts as a timeout. The timeout still kills the group, so no child survives into the diff.
+
 Residual risk: an agent with shell access can unset the environment variables and delete the hook. It can also use absolute paths to reach files outside the clone; the permission system of the CLI is the guard for that, not the runner. The acceptance command runs code from the clone by design. The isolation of the clone (no remote, no shared objects, a git dir that the runner owns) is the main guard.
 
 Deferred: OS-level containment (a container, a VM or a dedicated user started by the runner).
