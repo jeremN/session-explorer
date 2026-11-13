@@ -74,3 +74,27 @@ test('G2: on timeout, realExec resolves even when a detached descendant keeps th
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+// The parent starts a grandchild in the same process group with no pipes, writes its pid, then exits 0.
+const BACKGROUND = `
+const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+child.unref();
+require('node:fs').writeFileSync(process.env.PID_FILE, String(child.pid));
+`;
+
+test('after a normal exit, a background descendant in the same group is dead when realExec resolves', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'eval-exec-'));
+	const pidFile = join(dir, 'pid');
+	let pid = 0;
+	try {
+		const result = await realExec(process.execPath, ['-e', BACKGROUND], { env: { PID_FILE: pidFile } });
+		pid = Number(readFileSync(pidFile, 'utf8'));
+		assert.ok(pid > 0);
+		assert.deepEqual([result.code, result.timedOut], [0, false]);
+		assert.equal(alive(pid), false);
+	} finally {
+		if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

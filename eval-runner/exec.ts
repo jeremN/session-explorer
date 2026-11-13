@@ -9,6 +9,10 @@ const KILL_GRACE_MS = 10_000;
 // After the SIGKILL, the wait for the process group and for the pipes stops at this limit.
 const GROUP_WAIT_MS = 5_000;
 const POLL_MS = 50;
+// After a normal exit, the SIGTERM to the rest of the group gets this grace before the SIGKILL.
+const EXIT_GRACE_MS = 1_000;
+
+const sleep = (ms: number) => new Promise((wake) => setTimeout(wake, ms));
 
 // True while a process of the group exists, a zombie included.
 function groupAlive(pid: number) {
@@ -68,7 +72,20 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 			// On a timeout, the result waits until the whole group is gone: the SIGKILL comes after the grace period at most.
 			if (timedOut && child.pid !== undefined) {
 				const pid = child.pid;
-				while (groupAlive(pid) && (killedAt === undefined || Date.now() < killedAt + GROUP_WAIT_MS)) await new Promise((wake) => setTimeout(wake, POLL_MS));
+				while (groupAlive(pid) && (killedAt === undefined || Date.now() < killedAt + GROUP_WAIT_MS)) await sleep(POLL_MS);
+			}
+			// After a normal exit, a descendant of the group must not change the clone after the diff.
+			// A descendant in another session (setsid) stays out of reach.
+			if (!timedOut && child.pid !== undefined && groupAlive(child.pid)) {
+				const pid = child.pid;
+				signal('SIGTERM');
+				const termAt = Date.now();
+				while (groupAlive(pid) && Date.now() < termAt + EXIT_GRACE_MS) await sleep(POLL_MS);
+				if (groupAlive(pid)) {
+					signal('SIGKILL');
+					const killAt = Date.now();
+					while (groupAlive(pid) && Date.now() < killAt + GROUP_WAIT_MS) await sleep(POLL_MS);
+				}
 			}
 			clearTimeout(killTimer);
 			clearTimeout(forceTimer);
