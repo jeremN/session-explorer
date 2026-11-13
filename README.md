@@ -87,7 +87,7 @@ All thresholds are choices, not measured optima. They are constants at the top o
 - **Error loop.** The same failure 3 times or more: same agent, tool and message. Each loop gets a class: `exit_code`, `permission`, `blocked`, `stale_file`, `not_found`, `timeout` or `other`. The cost counts only the requests that launched the repeats, so it is a lower limit.
 - **Retry streak.** The same call (agent, tool, target) after a failure of that call, within the last 8 calls of the agent. It overlaps with error loops: do not add the two rows.
 - **Subagent runs.** Raw cost of each subagent. No verdict on whether it was worth it.
-- **Verified task.** A test, build, lint or typecheck command ran after the last edit of the task: `npm|pnpm|yarn|bun test|build|lint|check|typecheck`, `tsc`, `vitest`, `jest`, `eslint`, `svelte-check`, `playwright test`, `node --test`, `pytest`, `mypy`, `ruff`, `cargo test|check|build|clippy`, `go test|build|vet`. An edit after the check cancels it. The tool does not read the result of the check: a failing test still counts.
+- **Verified task.** A test, build, lint or typecheck command ran after the last edit of the task: `npm|pnpm|yarn|bun test|build|lint|check|typecheck`, `tsc`, `vitest`, `jest`, `eslint`, `svelte-check`, `playwright test`, `node --test`, `pytest`, `mypy`, `ruff`, `cargo test|check|build|clippy`, `go test|build|vet`. An edit after the check cancels it. `check` gives the result of that last command: `failed` when it exits with an error, or when its output holds a failure line (`FAIL `, `2 failed`, `3 errors`, `error TS2304`), because `| tail` hides the exit code; `passed` otherwise; `unknown` when it has no result (interrupted, still running).
 - **Interruption.** You stopped the agent (`[Request interrupted by user]`).
 - **Refusal.** You refused a tool call (`refusals`), or the permission system denied it (`denials`: auto mode classifier, safety check, permission rule).
 - **Created merge request or pull request.** The first mention of a merge request, over all sessions in the window, comes from a creating command:
@@ -174,7 +174,7 @@ The hook prices the request with `session-explorer/price.ts`. Any failure ends w
 
 | File | Content |
 |---|---|
-| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, task verdicts with `tasks.verified`, `mrs`. Totals of the waste signals. |
+| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, task verdicts with `tasks.verified` and `tasks.failed`, `mrs`. Totals of the waste signals. |
 | `out/sessions/<id>.json` | The event list of one session, for the viewer. |
 | `out/waste.json` | One row per finding. |
 

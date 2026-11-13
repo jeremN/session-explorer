@@ -97,7 +97,7 @@ main[hidden]{display:none}
 .errrow .loop{display:block;margin-top:2px;font:400 11px var(--font-ui);color:var(--crit-text)}
 .errrow .n{font:500 12px var(--font-mono);color:var(--ink2)}
 .tasks{display:flex;flex-direction:column;gap:4px;max-height:300px;overflow-y:auto}
-.taskrow{flex:none;display:grid;grid-template-columns:28px 170px 112px 56px minmax(0,1fr) minmax(0,.6fr);gap:12px;align-items:baseline;text-align:left;width:100%;background:var(--inset);border:0;border-radius:var(--r-inset);padding:7px 10px;cursor:pointer;font-size:13px}
+.taskrow{flex:none;display:grid;grid-template-columns:28px 170px 150px 56px minmax(0,1fr) minmax(0,.6fr);gap:12px;align-items:baseline;text-align:left;width:100%;background:var(--inset);border:0;border-radius:var(--r-inset);padding:7px 10px;cursor:pointer;font-size:13px}
 .taskrow:hover{background:color-mix(in oklab,var(--ink) 8%,transparent)}
 .taskrow[aria-current="true"]{background:color-mix(in oklab,var(--ink) 12%,transparent)}
 .taskrow:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -236,7 +236,7 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
         </div>
       </section>
       <section class="panel">
-        <h3>Tâches<span class="help"><button type="button" aria-label="Aide : tâches">?</button><span role="tooltip"><b>Rôle :</b> une ligne par tâche du traceur. Une tâche s'ouvre à un prompt et se ferme au premier prompt qui suit une édition ; les prompts sans édition fusionnent avec la tâche suivante.<ul><li><b>Verdict :</b> recherche dans le brain avant la première édition, après, ou jamais.</li><li><b>Prompt :</b> le premier prompt de la tâche. « +2 » : deux autres prompts ont suivi avant l'édition.</li><li><b>Vérifiée :</b> un test, un build, un lint ou un typecheck tourne après la dernière édition de la tâche. Une édition après le test annule la preuve.</li><li><b>Fichier :</b> cible de la première édition.</li><li><b>Clic :</b> place la lecture au début de la tâche.</li></ul></span></span></h3>
+        <h3>Tâches<span class="help"><button type="button" aria-label="Aide : tâches">?</button><span role="tooltip"><b>Rôle :</b> une ligne par tâche du traceur. Une tâche s'ouvre à un prompt et se ferme au premier prompt qui suit une édition ; les prompts sans édition fusionnent avec la tâche suivante.<ul><li><b>Verdict :</b> recherche dans le brain avant la première édition, après, ou jamais.</li><li><b>Prompt :</b> le premier prompt de la tâche. « +2 » : deux autres prompts ont suivi avant l'édition.</li><li><b>Vérification :</b> un test, un build, un lint ou un typecheck tourne après la dernière édition de la tâche. Une édition après le test annule la preuve. « Réussie » ou « échouée » lit le résultat de la dernière vérification : code de sortie, puis lignes d'échec (FAIL, « 2 failed », error TS…), car un « | tail » masque le code de sortie.</li><li><b>Fichier :</b> cible de la première édition.</li><li><b>Clic :</b> place la lecture au début de la tâche.</li></ul></span></span></h3>
         <div class="tasks" id="tasks"></div>
       </section>
       <details>
@@ -262,6 +262,8 @@ const fmtH=m=>Math.floor(m/60)+':'+pad(Math.round(m%60));
 const dur=min=>{const m=Math.round(min);return Math.floor(m/60)+'h'+pad(m%60)};
 const KIND={prompt:'Prompt',llm:'Requête LLM',tool:'Outil',edit:'Édition',error:'Erreur',subagent:'Sous-agent',interrupt:'Interruption'};
 const REFUSAL={user:'refusé par vous',system:'refusé par le mode auto'};
+// Label and tone of the last check of a task. 'unknown': the check has no result row (interrupted, still running).
+const CHECK={passed:['vérif. réussie','positive'],failed:['vérif. échouée','negative'],unknown:['vérif. sans résultat','neutral'],none:['non vérifiée','warning']};
 const VERDICT={before:'avant',after:'après',never:'jamais'};
 // Tone of the status pill for a tracer task: 'positive' | 'warning' | 'negative' | 'info' | 'neutral'.
 // task.brain: 'before' | 'after' | 'never' (brain search before the first edit, after it, or never).
@@ -333,7 +335,7 @@ function renderHead(){
   const nErr=S.ev.filter(e=>e.kind==='error').length;
   const items=[['Temps actif',dur(S.cfg.durMin)],['Événements',S.ev.length],['Requêtes LLM',S.llms.length],['Coût',costText(S.tot.cost,S.unpriced,S.llms.length)],['Tokens facturés',kfmt(billed)],['Cache lu',Math.round(hit*100)+' %'],['Erreurs',nErr]
 ,['Tâches av. / ap. / jamais',['before','after','never'].map(v=>S.tasks.filter(task=>task.brain===v).length).join(' / ')]
-,['Tâches vérifiées',S.tasks.filter(task=>task.verified).length+' / '+S.tasks.length]
+,['Vérif. réussies / échouées',['passed','failed'].map(c=>S.tasks.filter(task=>task.verified&&task.check===c).length).join(' / ')+' sur '+S.tasks.length]
 ,['Interruptions',S.ev.filter(e=>e.kind==='interrupt').length]
 ,['Refus vous / auto',['user','system'].map(r=>S.ev.filter(e=>e.refusal===r).length).join(' / ')]];
   $('#stats').innerHTML=items.map(([a,b])=>stat(a,b)).join('');
@@ -359,7 +361,7 @@ function renderTasks(){
     const [n,verdict,check,at,ask,file]=b.children;
     n.textContent=task.n;
     verdict.innerHTML=pill('brain '+VERDICT[task.brain]+(task.memory?' · mémoire':''),verdictTone(task));
-    check.innerHTML=task.verified?pill('vérifiée','positive'):pill('non vérifiée','warning');
+    check.innerHTML=pill(...CHECK[task.verified?task.check:'none']);
     at.textContent=clock(task.start);
     ask.textContent=(task.ask||'(sans prompt)')+(task.prompts>1?'  +'+(task.prompts-1):'');
     ask.title=task.ask;
@@ -504,7 +506,7 @@ function renderInspector(){
     const lead=task.brainAt?Math.round(Math.abs(Date.parse(task.editAt)-Date.parse(task.brainAt))/60000):0;
     const detail=task.brain==='before'?' · brain '+lead+' min avant édition':task.brain==='after'?' · brain '+lead+' min après édition':'';
     const line=document.createElement('div');line.className='sub';
-    line.textContent='Tâche '+task.n+' · '+VERDICT[task.brain]+detail+(task.memory?' · mémoire lue avant':'');
+    line.textContent='Tâche '+task.n+' · '+VERDICT[task.brain]+detail+(task.memory?' · mémoire lue avant':'')+' · '+CHECK[task.verified?task.check:'none'][0];
     box.appendChild(line);
   }
   $('#strip').textContent='#'+(i+1)+' · '+clock(e.wall)+' · '+describe(e)+' · cumul '+money(cumAt(i));

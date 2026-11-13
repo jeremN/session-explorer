@@ -8,7 +8,9 @@ import { join } from 'node:path';
 
 export type TaskTrace = { start: string; brain: 'before' | 'after' | 'never'; memory: boolean };
 // `verified`: a test, build, lint or typecheck command ran after the last edit of the task.
-export type TaskSpan = TaskTrace & { end: string; editAt: string; brainAt?: string; memoryAt?: string; verified: boolean; verifiedAt?: string };
+// `check`: the result of that last command. 'unknown' when no result row exists (interrupted, still running).
+export type Check = 'passed' | 'failed' | 'unknown';
+export type TaskSpan = TaskTrace & { end: string; editAt: string; brainAt?: string; memoryAt?: string; verified: boolean; verifiedAt?: string; check?: Check };
 type EventKind = 'brain' | 'memory' | 'edit' | 'verify';
 type Counts = { tasks: number; before: number; after: number; never: number; memory: number };
 
@@ -69,7 +71,12 @@ const VERIFY = new RegExp(
 		')'
 );
 
+// A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.
+const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
+
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
+const resultText = (content: unknown) =>
+	typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => text(block?.text)).join('\n') : '';
 
 function knowledgeSource(collections: string[]): EventKind | undefined {
 	if (collections.length === 0 || collections.some((name) => knowledge.brainCollections.has(name))) return 'brain';
@@ -128,7 +135,8 @@ export function isUserPrompt(entry: Record<string, any>) {
 
 // `entries` holds the parsed lines of one session and of its subagents, in any order.
 export function traceTasks(entries: unknown[]): { start: string | undefined; tasks: TaskSpan[] } {
-	const events: Array<{ timestamp: string; kind: EventKind | 'prompt' }> = [];
+	const events: Array<{ timestamp: string; kind: EventKind | 'prompt'; id?: string }> = [];
+	const results = new Map<string, Check>();
 	let start: string | undefined;
 	let last = '';
 	for (const entry of entries as Array<Record<string, any>>) {
@@ -137,22 +145,30 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 		if (start === undefined || timestamp < start) start = timestamp;
 		if (timestamp > last) last = timestamp;
 		if (isUserPrompt(entry)) events.push({ timestamp, kind: 'prompt' });
-		const content = entry.type === 'assistant' ? entry.message?.content : undefined;
+		const content = entry.message?.content;
 		if (!Array.isArray(content)) continue;
+		if (entry.type === 'user') {
+			for (const block of content) {
+				if (block?.type !== 'tool_result') continue;
+				results.set(text(block.tool_use_id), block.is_error || FAILURE.test(resultText(block.content)) ? 'failed' : 'passed');
+			}
+			continue;
+		}
+		if (entry.type !== 'assistant') continue;
 		for (const block of content) {
 			if (block?.type !== 'tool_use') continue;
 			const kind = classify(text(block.name), block.input ?? {});
-			if (kind) events.push({ timestamp, kind });
+			if (kind) events.push({ timestamp, kind, id: text(block.id) });
 		}
 	}
 	events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
 	const tasks: TaskSpan[] = [];
-	type OpenTask = { start: string; brain?: string; memory?: string; edit?: string; lastEdit?: string; verify?: string };
+	type OpenTask = { start: string; brain?: string; memory?: string; edit?: string; lastEdit?: string; verify?: string; verifyId?: string };
 	let open: OpenTask | undefined;
 	const close = (end: string) => {
 		if (open?.edit === undefined) return;
-		const { brain, memory, edit, lastEdit = edit, verify } = open;
+		const { brain, memory, edit, lastEdit = edit, verify, verifyId } = open;
 		const verified = verify !== undefined && verify >= lastEdit;
 		tasks.push({
 			start: open.start,
@@ -163,18 +179,18 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 			...(brain === undefined ? {} : { brainAt: brain }),
 			...(memory === undefined ? {} : { memoryAt: memory }),
 			verified,
-			...(verified ? { verifiedAt: verify } : {})
+			...(verified ? { verifiedAt: verify, check: results.get(verifyId ?? '') ?? 'unknown' } : {})
 		});
 		open = undefined;
 	};
-	for (const { timestamp, kind } of events) {
+	for (const { timestamp, kind, id } of events) {
 		if (kind === 'prompt') {
 			close(timestamp);
 			open ??= { start: timestamp };
 			continue;
 		}
 		open ??= { start: timestamp };
-		if (kind === 'verify') open.verify = timestamp;
+		if (kind === 'verify') Object.assign(open, { verify: timestamp, verifyId: id });
 		else open[kind] ??= timestamp;
 		if (kind === 'edit') open.lastEdit = timestamp;
 	}

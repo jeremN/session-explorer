@@ -39,7 +39,7 @@ test('summarizeSession: one index row', () => {
 	const tasks = [
 		{ ...span, brain: 'before' as const, verified: true },
 		{ ...span, brain: 'never' as const, verified: false },
-		{ ...span, brain: 'never' as const, verified: true }
+		{ ...span, brain: 'never' as const, verified: true, check: 'failed' as const }
 	];
 	assert.deepEqual(summarizeSession('abc', 'proj', parsed, tasks), {
 		id: 'abc',
@@ -59,7 +59,7 @@ test('summarizeSession: one index row', () => {
 		refusals: 1,
 		denials: 1,
 		subagents: 1,
-		tasks: { before: 1, after: 0, never: 2, verified: 2 },
+		tasks: { before: 1, after: 0, never: 2, verified: 2, failed: 1 },
 		mrs: []
 	});
 });

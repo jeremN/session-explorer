@@ -28,7 +28,7 @@ export function priceEvents(events: SessionEvent[], rates: Record<string, Rate> 
 	return events.map((event) => (event.kind === 'llm' && event.tok ? { ...event, cost: costOf(event.model ?? '', event.tok, rates) } : event));
 }
 
-export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain' | 'verified'>>) {
+export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain' | 'verified' | 'check'>>) {
 	const requests = parsed.events.filter((event) => event.kind === 'llm' && event.tok);
 	const sum = (pick: (event: SessionEvent) => number) => requests.reduce((total, event) => total + pick(event), 0);
 	const fresh = sum((event) => event.tok!.fresh);
@@ -56,7 +56,7 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 		refusals: count((event) => event.refusal === 'user'),
 		denials: count((event) => event.refusal === 'system'),
 		subagents: parsed.agents.length,
-		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never'), verified: tasks.filter((task) => task.verified).length },
+		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never'), verified: tasks.filter((task) => task.verified).length, failed: tasks.filter((task) => task.check === 'failed').length },
 		mrs: [] as string[]
 	};
 }

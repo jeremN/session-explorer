@@ -229,3 +229,26 @@ test('traceTasks: a task is verified when a check runs after its last edit', () 
 		{ verified: false, verifiedAt: undefined }
 	]);
 });
+
+test('traceTasks: the result of the last check gives passed, failed or unknown', () => {
+	const run = (minute: number, id: string, command = 'pnpm test') => ({
+		type: 'assistant',
+		timestamp: at(minute),
+		message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] }
+	});
+	const output = (minute: number, id: string, content: unknown, isError = false) => ({
+		type: 'user',
+		timestamp: at(minute),
+		message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content }] }
+	});
+	const { tasks } = traceTasks([
+		prompt(0), repoEdit(1), run(2, 'a'), output(3, 'a', 'Exit code 1\nFAIL src/a.test.ts', true),
+		prompt(10, 'b'), repoEdit(11), run(12, 'b'), output(13, 'b', 'Exit code 1', true), run(14, 'c'), output(15, 'c', 'Tests 12 passed (12)'),
+		prompt(20, 'c'), repoEdit(21), run(22, 'd', 'pnpm test | tail -5'), output(23, 'd', [{ type: 'text', text: ' Tests  2 failed | 10 passed (12)' }]),
+		prompt(30, 'd'), repoEdit(31), run(32, 'e', 'npx tsc --noEmit'), output(33, 'e', 'src/a.ts(3,1): error TS2304: Cannot find name x.'),
+		prompt(40, 'e'), repoEdit(41), run(42, 'f'),
+		prompt(45, 'lint'), repoEdit(46), run(47, 'g', 'npx eslint src'), output(48, 'g', '\n✖ 12 problems (0 errors, 12 warnings)\n'),
+		prompt(50, 'f'), repoEdit(51)
+	]);
+	assert.deepEqual(tasks.map((task) => task.check), ['failed', 'passed', 'failed', 'failed', 'unknown', 'passed', undefined]);
+});
