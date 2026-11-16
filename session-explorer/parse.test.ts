@@ -230,16 +230,17 @@ test('a user interruption is an interrupt event of the main agent', () => {
 
 test('a refused call carries who refused it: the user or the permission system', () => {
 	const session = parseSession([
-		assistant(1, 'msg_1', [call('t1', 'Bash', { command: 'rm -rf dist' }), call('t2', 'Bash', { command: 'git push' }), call('t3', 'Bash', { command: 'ls nope' }), call('t4', 'Bash', { command: 'git reset --hard' }), call('t5', 'Bash', { command: 'cd /x && make' })]),
+		assistant(1, 'msg_1', [call('t1', 'Bash', { command: 'rm -rf dist' }), call('t2', 'Bash', { command: 'git push' }), call('t3', 'Bash', { command: 'ls nope' }), call('t4', 'Bash', { command: 'git reset --hard' }), call('t5', 'Bash', { command: 'cd /x && make' }), call('t6', 'Bash', { command: 'cat a.ts' })]),
 		result(2, 't1', "The user doesn't want to proceed with this tool use. The tool use was rejected."),
 		result(2, 't2', 'Permission to use Bash has been denied because the action is outside the task.'),
 		result(2, 't3', 'ls: nope: No such file or directory'),
 		result(2, 't4', 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Destructive].'),
-		result(2, 't5', 'Permission to use Bash with command cd /x && make has been denied.')
+		result(2, 't5', 'Permission to use Bash with command cd /x && make has been denied.'),
+		result(2, 't6', 'Permission for this tool use was denied. It requires approval, and this session has no approval surface.')
 	]);
 	assert.deepEqual(
 		session?.events.filter((event) => event.kind === 'error').map((event) => event.refusal),
-		['user', 'system', undefined, 'system', 'system']
+		['user', 'system', undefined, 'system', 'system', 'system']
 	);
 });
 

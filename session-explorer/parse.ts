@@ -40,7 +40,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const INTERRUPT = /^\[Request interrupted by user/;
 const USER_REFUSAL = /^The user doesn't want to (?:proceed|take this action)/;
 // The message can be cut at 200 characters, so only its start is matched.
-const SYSTEM_DENIAL = /^Permission (?:to use |for this (?:action|command) was denied)/;
+const SYSTEM_DENIAL = /^Permission (?:to use |for this (?:action|command|tool use) was denied)/;
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 export const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
