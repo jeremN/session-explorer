@@ -1,11 +1,12 @@
 // Eval runner: runs one task under several Claude Code configurations, N times each, and scores every run.
-// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]
+// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--out <dir>]
 // Exit codes: 0 done (or --help, or a dry run), 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 import { randomUUID } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { cacheKey, readCache, writeCache } from './cache.ts';
 import { buildCommand, setupFiles } from './command.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
@@ -16,21 +17,22 @@ import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
 import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
-const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]
+const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--out <dir>]
 
   <spec.json>   the eval spec: one task, the configurations, the run count
   --dry-run     validate the spec and print the planned runs. Starts no agent and writes nothing.
   --runs N      run each configuration N times (1 to 20). Overrides the spec.
   --only a,b    run only these configurations
   --keep        keep the clone of every run
+  --no-cache    run every run, even when a finished run with the same task, config and CLI version exists
   --claude P    the claude executable (default: claude)
   --out DIR     where the results go (default: eval-runner/out)
 `;
 
-type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; claude: string; out: string };
+type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; claude: string; out: string };
 
 function parseArgs(argv: string[]): Options | 'help' {
-	const options: Options = { specPath: '', dryRun: false, keep: false, claude: 'claude', out: join(import.meta.dirname, 'out') };
+	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, claude: 'claude', out: join(import.meta.dirname, 'out') };
 	for (let index = 0; index < argv.length; index++) {
 		const flag = argv[index];
 		const value = () => {
@@ -41,6 +43,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 		if (flag === '--help' || flag === '-h') return 'help';
 		else if (flag === '--dry-run') options.dryRun = true;
 		else if (flag === '--keep') options.keep = true;
+		else if (flag === '--no-cache') options.noCache = true;
 		else if (flag === '--runs') {
 			options.runs = Number(value());
 			if (!Number.isInteger(options.runs) || options.runs < 1 || options.runs > 20) throw new SpecError('--runs: required integer from 1 to 20');
@@ -58,8 +61,9 @@ function parseArgs(argv: string[]): Options | 'help' {
 type Planned = { id: string; config: Config; index: number };
 
 // Round-robin: a stop on budget leaves balanced samples, and a drift over time spreads over every configuration.
-export function planRuns(configs: Config[], runs: number): Planned[] {
-	return Array.from({ length: runs }, (_, index) => configs.map((config) => ({ id: `${config.name}-${index + 1}`, config, index: index + 1 }))).flat();
+// `have` counts the cached runs of a config: its new runs start after them.
+export function planRuns(configs: Config[], runs: number, have: Record<string, number> = {}): Planned[] {
+	return Array.from({ length: runs }, (_, index) => configs.filter((config) => index >= (have[config.name] ?? 0)).map((config) => ({ id: `${config.name}-${index + 1}`, config, index: index + 1 }))).flat();
 }
 
 const evalIdOf = (name: string, now = new Date()) => `${now.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')}-${name}`;
@@ -197,10 +201,17 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	}
 	const evalId = evalIdOf(spec.name);
 	const evalDir = join(options.out, evalId);
-	const planned = planRuns(spec.configs, spec.runs);
+	const version = await exec(options.claude, ['--version']);
+	const cliVersion = version.code === 0 ? version.stdout.trim() : 'unknown';
+	const cacheDir = join(options.out, 'cache');
+	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion })]));
+	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
+	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || cliVersion === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
+	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
+	const planned = planRuns(spec.configs, spec.runs, Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length])));
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 
-	console.log(`Eval ${evalId}: ${planned.length} runs (${spec.configs.length} configs x ${spec.runs}) on ${spec.task.repo} at ${baseSha.slice(0, 7)}`);
+	console.log(`Eval ${evalId}: ${planned.length} runs (${spec.configs.length} configs x ${spec.runs}, ${reused.length} from the cache) on ${spec.task.repo} at ${baseSha.slice(0, 7)}`);
 	for (const run of planned) {
 		const { args } = buildCommand(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id) });
 		console.log(`${run.id} config=${run.config.name} model=${run.config.model ?? 'default'} clone=${join(tmpdir(), 'eval-runner', evalId, run.id)} argv: ${options.claude} ${args.join(' ')}`);
@@ -208,11 +219,10 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
 	if (options.dryRun) return 0;
 
-	const version = await exec(options.claude, ['--version']);
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	mkdirSync(join(evalDir, 'runs'), { recursive: true });
 	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir };
-	const runs: RunRecord[] = [];
+	const runs: RunRecord[] = [...reused];
 	let spent = 0;
 	let anyFailed = false;
 	for (const [position, run] of planned.entries()) {
@@ -230,13 +240,14 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		console.log(`[${position + 1}/${planned.length}] ${run.id} ${record.status}, check ${record.acceptance?.passed ? 'passed' : 'failed'}, ${record.metrics?.cost ?? '?'} $, ${record.wallSec ?? '?'} s`);
 	}
 
+	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
 	const stats = aggregate(runs, spec.configs.map((config) => config.name));
 	const saved = {
 		schema: 'eval-runner/v1',
 		id: evalId,
 		name: spec.name,
 		generatedAt: new Date().toISOString(),
-		cliVersion: version.code === 0 ? version.stdout.trim() : 'unknown',
+		cliVersion,
 		baseSha,
 		spec,
 		spent: dollars(spent),

@@ -197,6 +197,29 @@ test('hidden tests come from the solution commit after the agent stops, and stay
 	assert.doesNotMatch(readFileSync(join(evalDir(out), 'runs', run.id, 'diff.patch'), 'utf8'), /hidden\.test\.sh/);
 });
 
+test('a second eval reuses the finished runs, a changed config runs again, and --no-cache runs everything', async () => {
+	const out = join(root, 'out-cache');
+	const first = await cli([writeSpec('cache', { runs: 1 }), '--claude', FAKE, '--out', out]);
+	assert.equal(first.code, 0, first.stderr);
+	const second = await cli([writeSpec('cache', { runs: 1 }), '--claude', FAKE, '--out', out]);
+	assert.equal(second.code, 0, second.stderr);
+	const latest = () => JSON.parse(readFileSync(join(out, readdirSync(out).filter((name) => name !== 'index.json' && name !== 'cache').sort().at(-1)!, 'eval.json'), 'utf8'));
+	const reused = latest();
+	assert.deepEqual(reused.runs.map((run: { id: string; cached?: unknown }) => [run.id, Boolean(run.cached)]), [['baseline-1', true], ['terse-1', true]]);
+	assert.equal(reused.spent, 0);
+	assert.equal(reused.configs[0].pass.passed, 1);
+
+	await new Promise((wake) => setTimeout(wake, 1100));
+	const changed = await cli([writeSpec('cache', { runs: 1, configs: [{ name: 'baseline', model: 'sonnet' }, { name: 'terse', claudeMd: { text: 'Be brief.\n' } }] }), '--claude', FAKE, '--out', out]);
+	assert.equal(changed.code, 0, changed.stderr);
+	assert.deepEqual(latest().runs.map((run: { id: string; cached?: unknown }) => [run.id, Boolean(run.cached)]), [['baseline-1', true], ['terse-1', false]]);
+
+	await new Promise((wake) => setTimeout(wake, 1100));
+	const forced = await cli([writeSpec('cache', { runs: 1 }), '--claude', FAKE, '--out', out, '--no-cache']);
+	assert.equal(forced.code, 0, forced.stderr);
+	assert.deepEqual(latest().runs.map((run: { cached?: unknown }) => Boolean(run.cached)), [false, false]);
+});
+
 test('R2: a run with no CLI cost reserves its full cap, so the eval cap holds', async () => {
 	const out = join(root, 'out-r2');
 	const spec = writeSpec('nocost', { runs: 3, budget: { perRunUsd: 1, perEvalUsd: 2 }, task: { repo, prompt: 'x', timeoutSec: 1, acceptance: { command: 'true' } } });

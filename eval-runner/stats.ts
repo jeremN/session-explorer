@@ -27,6 +27,8 @@ export type RunRecord = {
 	metrics?: RunMetrics;
 	mrs?: string[];
 	note?: string;
+	// A run reused from the cache: the eval and the run where its files are.
+	cached?: { evalId: string; id: string };
 };
 export type Spread = { n: number; median: number; min: number; max: number; values: number[] };
 export type ConfigStats = { pass: { passed: number; n: number }; metrics: Record<string, Spread> };
