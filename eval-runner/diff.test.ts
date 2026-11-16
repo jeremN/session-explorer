@@ -32,6 +32,15 @@ test('compare: a metric is flagged only when the median after the change is outs
 	assert.equal(cheaper.metrics.find((metric) => metric.key === 'cost')!.outside, true);
 });
 
+test('compare: a gap under 10 % of the median, or under the rounding of the metric, is not flagged', () => {
+	const result = compare(
+		stats(3, 3, [0.07, 0.07, 0.07], { billedTokens: [11718, 11814, 11825], cacheReadShare: [0.87, 0.87, 0.87], errors: [0, 0, 0], verified: [1, 1, 1] }),
+		stats(3, 3, [0.06, 0.06, 0.06], { billedTokens: [11674, 11674, 11674], cacheReadShare: [0.83, 0.83, 0.83], errors: [1, 1, 1], verified: [0, 0, 0] })
+	);
+	const flagged = result.metrics.filter((row) => row.outside).map((row) => row.key);
+	assert.deepEqual(flagged, ['errors', 'verified']);
+});
+
 test('diffConfigs: a CLAUDE.md or an AGENTS.md becomes claudeMd, a skill directory replaces the skill of the same name', () => {
 	const template = { name: 'baseline', model: 'sonnet', skills: ['/s/skills/other', '/s/skills/tidy'] };
 	assert.deepEqual(diffConfigs(template, { kind: 'claudeMd', path: '/r/AGENTS.md', head: 'old rules\n' }), [

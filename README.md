@@ -121,7 +121,7 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 
 - A file (`CLAUDE.md`, `AGENTS.md`) becomes the CLAUDE.md of the clone. A directory is a skill: it replaces the skill of the config with the same directory name.
 - Verdict: `same` when the pass counts are equal, `better` or `worse` when the gap is half the runs or more, `borderline` otherwise. A borderline result gets more runs (3, then 6, then 10). The cache reuses the earlier runs, so a round pays only for the new ones.
-- A metric is flagged when its median after the change is outside the range of the `before` runs.
+- A metric is flagged when its median after the change is outside the range of the `before` runs and the gap is more than 10 % of the `before` median (and more than 0.01 $ for a cost, 0.02 for a share, 1 s for a duration).
 - For a skill, the report also lists how many times the skill loaded in each run. A skill that never loads cannot help.
 - The report goes to `diff.json` in the eval directory. It informs; it does not block anything.
 

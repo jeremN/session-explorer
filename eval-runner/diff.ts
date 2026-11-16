@@ -23,6 +23,11 @@ const USAGE = `Usage: node eval-runner/diff.ts <spec.json> --file <path> [--conf
 
 export type Target = { kind: 'claudeMd' | 'skill'; path: string; head: string | undefined };
 export type Verdict = 'same' | 'better' | 'worse' | 'borderline';
+// A run is rounded to the cent and the share to the hundredth. A gap under 10 % of the median, or under this floor, is
+// noise even when it leaves the range: three identical runs give a range of one value.
+const FLOOR: Record<string, number> = { cost: 0.01, subagentCost: 0.01, cacheReadShare: 0.02, wallSec: 1 };
+const RELATIVE = 0.1;
+
 export type MetricRow = { key: string; before: number; after: number; min: number; max: number; outside: boolean };
 
 // The pass rate decides the verdict. A gap of half the runs or more is clear; a smaller gap needs more runs.
@@ -36,7 +41,9 @@ export function compare(before: ConfigStats, after: ConfigStats): { verdict: Ver
 		.map((key) => {
 			const { median, min, max } = before.metrics[key];
 			const changed = after.metrics[key].median;
-			return { key, before: median, after: changed, min, max, outside: changed < min || changed > max };
+			const tolerance = Math.max(RELATIVE * Math.abs(median), FLOOR[key] ?? 0);
+			const outside = (changed < min || changed > max) && Math.abs(changed - median) > tolerance + 1e-9;
+			return { key, before: median, after: changed, min, max, outside };
 		});
 	return { verdict, metrics };
 }
