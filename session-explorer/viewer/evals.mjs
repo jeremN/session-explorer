@@ -16,6 +16,7 @@ const ROWS = [
 	['loops', 'Boucles', dec, 'low'],
 	['retries', 'Relances', dec, 'low'],
 	['subagentCost', 'Coût sous-agents', (n) => n.toFixed(2), 'low'],
+	['skillLoads', 'Skills chargés', dec, null],
 	['verified', 'Tâches vérifiées', dec, 'high'],
 	['failed', 'Vérifs en échec', dec, 'low'],
 	['lines', 'Lignes modifiées', (n) => String(Math.round(n)), null],

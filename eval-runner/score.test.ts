@@ -25,7 +25,9 @@ test('scoreRun gives the metrics of the synthetic transcript', () => {
 		failed: 0,
 		loops: 0,
 		retries: 0,
-		subagentCost: 0
+		subagentCost: 0,
+		skillLoads: 0,
+		skills: {}
 	});
 	assert.deepEqual(scored.mrs, []);
 	assert.equal(scored.summary.llmRequests, 2);
@@ -39,6 +41,19 @@ test('the session file has the shape of out/sessions/<id>.json', () => {
 	assert.equal(session.events.filter((event) => event.kind === 'llm').every((event) => typeof event.cost === 'number'), true);
 	assert.equal(session.tasks.length, 1);
 	assert.equal(session.tasks[0].check, 'passed');
+});
+
+test('skillLoads counts the Skill tool calls, and skills counts them per skill, subagents included', () => {
+	const call = (id: string, skill: unknown, sidechain = false) => ({
+		type: 'assistant',
+		isSidechain: sidechain,
+		timestamp: '2026-11-13T10:00:30.000Z',
+		sessionId: ID,
+		message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Skill', input: { skill } }] }
+	});
+	const scored = scoreRun([...entries, call('s1', 'svelte:svelte-code-writer'), call('s2', 'svelte:svelte-code-writer', true), call('s3', 'tdd'), call('s4', 42)], {}, ID)!;
+	assert.equal(scored.metrics.skillLoads, 4);
+	assert.deepEqual(scored.metrics.skills, { 'svelte:svelte-code-writer': 2, tdd: 1, unknown: 1 });
 });
 
 test('an empty transcript gives no score', () => {

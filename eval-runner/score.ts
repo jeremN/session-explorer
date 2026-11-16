@@ -29,7 +29,8 @@ export function scoreRun(entries: unknown[], subagentMeta: Record<string, AgentM
 		failed: summary.tasks.failed,
 		loops: waste.loops.length,
 		retries: waste.retries.length,
-		subagentCost: Math.round(waste.subagents.reduce((total, run) => total + run.cost, 0) * 100) / 100
+		subagentCost: Math.round(waste.subagents.reduce((total, run) => total + run.cost, 0) * 100) / 100,
+		...skillLoads(entries)
 	};
 	return {
 		metrics,
@@ -37,6 +38,20 @@ export function scoreRun(entries: unknown[], subagentMeta: Record<string, AgentM
 		mrs,
 		session: { id: sessionId, title: parsed.title, agents: parsed.agents, events: parsed.events, tasks }
 	};
+}
+
+// A skill that never loads cannot help. The Skill tool calls of the session and of its subagents, per skill.
+export function skillLoads(entries: unknown[]) {
+	const skills: Record<string, number> = {};
+	for (const entry of entries as Array<Record<string, any>>) {
+		if (entry?.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue;
+		for (const block of entry.message.content) {
+			if (block?.type !== 'tool_use' || block.name !== 'Skill') continue;
+			const name = typeof block.input?.skill === 'string' && block.input.skill ? block.input.skill : 'unknown';
+			skills[name] = (skills[name] ?? 0) + 1;
+		}
+	}
+	return { skillLoads: Object.values(skills).reduce((total, count) => total + count, 0), skills };
 }
 
 // Reads the transcript of a run and its subagent files, then scores them.

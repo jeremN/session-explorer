@@ -12,6 +12,8 @@ export type RunMetrics = {
 	loops: number;
 	retries: number;
 	subagentCost: number;
+	skillLoads: number;
+	skills: Record<string, number>;
 };
 export type RunRecord = {
 	id: string;
@@ -61,6 +63,7 @@ const PICK: Record<string, (run: RunRecord) => number | undefined> = {
 	loops: (run) => run.metrics?.loops,
 	retries: (run) => run.metrics?.retries,
 	subagentCost: (run) => run.metrics?.subagentCost,
+	skillLoads: (run) => run.metrics?.skillLoads,
 	verified: (run) => run.metrics?.verified,
 	failed: (run) => run.metrics?.failed,
 	lines: (run) => (run.diff ? run.diff.added + run.diff.deleted : undefined)
