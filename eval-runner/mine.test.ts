@@ -52,6 +52,20 @@ test('a task is not a candidate when its check failed, it has no check, no commi
 	assert.deepEqual(await findCandidates([{ id: 's5', entries: passing }], fakeGit({ isRepo: async () => false })), []);
 });
 
+test('hidden tests: the files the check names win; otherwise one commit with at most 5 test files; otherwise no candidate', async () => {
+	const tests = ['src/cart.test.ts', 'src/price.test.ts', 'src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts', 'src/d.test.ts'];
+	const many = fakeGit({ changedFiles: async () => tests, commitsBetween: async () => [{ sha: 'c1', parent: 'base0' }, { sha: 'c2', parent: 'c1' }] });
+	const named = [prompt(0, 'a'), edit(1), ...check(2, 'npx vitest run src/cart.test.ts price.test', 'ok')];
+	const [candidate] = await findCandidates([{ id: 'n1', entries: named }], many);
+	assert.deepEqual(candidate.spec.task.hiddenTests, { commit: 'c2', paths: ['src/cart.test.ts', 'src/price.test.ts'] });
+	assert.equal(candidate.commits, 2);
+	const whole = [prompt(0, 'a'), edit(1), ...check(2, 'pnpm test', 'ok')];
+	assert.deepEqual(await findCandidates([{ id: 'n2', entries: whole }], many), []);
+	assert.deepEqual(await findCandidates([{ id: 'n3', entries: whole }], fakeGit({ changedFiles: async () => tests })), []);
+	const small = fakeGit({ changedFiles: async () => tests.slice(0, 5) });
+	assert.deepEqual((await findCandidates([{ id: 'n4', entries: whole }], small))[0].spec.task.hiddenTests.paths, tests.slice(0, 5));
+});
+
 test('a session of the eval runner itself is skipped, and a check with an absolute path is marked for review', async () => {
 	const runner = [prompt(0, 'a', '/tmp/eval-runner/e1/baseline-1'), edit(1), ...check(2, 'pnpm test', 'ok')];
 	assert.deepEqual(await findCandidates([{ id: 'r1', entries: runner }], fakeGit({ isRepo: async () => true }), ['/tmp/eval-runner']), []);

@@ -20,6 +20,8 @@ export type Candidate = {
 	session: string;
 	start: string;
 	repo: string;
+	// Commits between the base and the solution. One commit is the cleanest task.
+	commits: number;
 	// True when the check command names an absolute path: read it before you accept the task.
 	review: boolean;
 	spec: {
@@ -34,6 +36,9 @@ export type Candidate = {
 const TEST_FILE = /(?:^|\/)(?:__tests__|tests?)\/|\.(?:test|spec)\.[cm]?[jt]sx?$|_test\.(?:go|py)$|(?:^|\/)test_[^/]+\.py$/;
 // A commit a few minutes after the next prompt still belongs to the task: the agent often commits last.
 const COMMIT_GRACE_MS = 10 * 60_000;
+// Without a test file named in the check, a task keeps all its test files only when they are few and in one commit.
+// A wider window mixes several intentions, and its tests go beyond the prompt.
+const MAX_UNNAMED_TESTS = 5;
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 
 export async function findCandidates(sessions: Array<{ id: string; entries: unknown[] }>, git: GitLookup, skipUnder: string[] = []): Promise<Candidate[]> {
@@ -53,13 +58,15 @@ export async function findCandidates(sessions: Array<{ id: string; entries: unkn
 			const first = commits[0];
 			const solution = commits.at(-1);
 			if (!first?.parent || !solution) continue;
-			const paths = (await git.changedFiles(repo, first.parent, solution.sha)).filter((path) => TEST_FILE.test(path));
+			const tests = (await git.changedFiles(repo, first.parent, solution.sha)).filter((path) => TEST_FILE.test(path));
+			const paths = hiddenTestsOf(tests, command, commits.length);
 			if (paths.length === 0) continue;
 			const local = command.split(repo + '/').join('').split(repo).join('.');
 			candidates.push({
 				session: id,
 				start: task.start,
 				repo,
+				commits: commits.length,
 				review: /(?:^|[\s='"])\//.test(local),
 				spec: {
 					name: `${id.slice(0, 8)}-${task.start.slice(0, 16).replace(/[^0-9]/g, '')}`,
@@ -72,6 +79,17 @@ export async function findCandidates(sessions: Array<{ id: string; entries: unkn
 		}
 	}
 	return candidates;
+}
+
+// The test files that the check names, by path or by file name without its extension. None named: all of them, if the
+// task is one commit with few test files.
+function hiddenTestsOf(tests: string[], command: string, commits: number) {
+	const named = tests.filter((path) => {
+		const file = path.slice(path.lastIndexOf('/') + 1);
+		return command.includes(path) || command.includes(file) || command.includes(file.replace(/\.[^.]+$/, ''));
+	});
+	if (named.length > 0) return named;
+	return commits === 1 && tests.length <= MAX_UNNAMED_TESTS ? tests : [];
 }
 
 // The command of the last check of the task: the Bash call at `verifiedAt` that classify calls a check.
