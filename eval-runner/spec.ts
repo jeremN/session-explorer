@@ -21,6 +21,7 @@ export type Config = {
 	disallowedTools?: string[];
 	mcpConfig?: Record<string, unknown> | string;
 	bare?: boolean;
+	sandbox?: boolean;
 };
 export type Spec = {
 	name: string;
@@ -77,7 +78,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare']);
+		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -112,6 +113,10 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		if (config.bare !== undefined && config.bare !== null) {
 			if (typeof config.bare !== 'boolean') fail(`${at}.bare`, 'required boolean');
 			result.bare = config.bare as boolean;
+		}
+		if (config.sandbox !== undefined && config.sandbox !== null) {
+			if (typeof config.sandbox !== 'boolean') fail(`${at}.sandbox`, 'required boolean');
+			result.sandbox = config.sandbox as boolean;
 		}
 		return result;
 	});

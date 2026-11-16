@@ -12,6 +12,11 @@ const EMPTY_MCP = '{"mcpServers":{}}';
 const ALWAYS_DISALLOWED = 'Bash(git push:*)';
 // The deny rule is a prefix rule: `git -C . push` or `env git push` bypass it. This environment turns off every git
 // transport for the agent, a local path included. An agent with a shell can still unset it, so the clone stays the main guard.
+// The Bash sandbox of Claude Code: commands and their children write only in the clone, with no network.
+// The runner locks these keys: no start without the sandbox, and no retry of a blocked command outside it.
+// Read, Edit and Write are not sandboxed; the permission rules guard them.
+const SANDBOX = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false };
+
 export const AGENT_ENV: Record<string, string> = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' };
 
 export function buildCommand(config: Config, context: Context, readText: (path: string) => string = (path) => readFileSync(path, 'utf8')) {
@@ -30,13 +35,29 @@ export function buildCommand(config: Config, context: Context, readText: (path: 
 	if (config.bare) args.push('--bare');
 	if (config.model) args.push('--model', config.model);
 	if (config.appendSystemPrompt) args.push('--append-system-prompt', config.appendSystemPrompt);
-	if (config.settings !== undefined) args.push('--settings', generated('settings.json', config.settings));
+	if (config.sandbox) args.push('--settings', generated('settings.json', withSandbox(config.settings, readText)));
+	else if (config.settings !== undefined) args.push('--settings', generated('settings.json', config.settings));
 	for (const plugin of config.plugins ?? []) args.push('--plugin-dir', plugin);
 	// The user MCP servers would leak into every configuration, so the config is always strict.
 	args.push('--mcp-config', generated('mcp.json', config.mcpConfig, EMPTY_MCP), '--strict-mcp-config');
 	if (config.allowedTools?.length) args.push('--allowedTools', ...config.allowedTools);
 	args.push('--disallowedTools', ALWAYS_DISALLOWED, ...(config.disallowedTools ?? []));
 	return { args, files, env: AGENT_ENV };
+}
+
+function withSandbox(settings: Config['settings'], readText: (path: string) => string) {
+	let base: unknown = settings ?? {};
+	if (typeof settings === 'string') {
+		try {
+			base = JSON.parse(readText(settings));
+		} catch {
+			base = undefined;
+		}
+	}
+	const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+	if (!isObject(base)) throw new Error(`${typeof settings === 'string' ? settings : 'settings'}: a sandbox config needs settings that are a JSON object`);
+	const own = isObject(base.sandbox) ? base.sandbox : {};
+	return { ...base, sandbox: { ...own, ...SANDBOX } };
 }
 
 // What the runner writes into the clone before the setup commit.

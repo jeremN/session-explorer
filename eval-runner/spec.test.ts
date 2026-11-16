@@ -63,6 +63,12 @@ test('bypassPermissions is refused, a known mode is kept', () => {
 	assert.equal(validateSpec({ ...base(), configs: [{ name: 'a', permissionMode: 'plan' }] }, '/s').configs[0].permissionMode, 'plan');
 });
 
+test('sandbox is an optional boolean', () => {
+	assert.equal(validateSpec({ ...base(), configs: [{ name: 'a', sandbox: true }] }, '/s').configs[0].sandbox, true);
+	assert.equal(validateSpec(base(), '/s').configs[0].sandbox, undefined);
+	failure({ ...base(), configs: [{ name: 'a', sandbox: 'yes' }] }, 'spec.configs[0].sandbox');
+});
+
 test('other fields are checked: slug, runs range, config count, acceptance, unknown field, bad type', () => {
 	failure({ ...base(), name: 'Bad Name' }, 'spec.name');
 	failure({ ...base(), runs: 21 }, 'spec.runs');

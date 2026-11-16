@@ -69,6 +69,29 @@ test('settings and MCP config given as a file path are copied into the run direc
 	]);
 });
 
+const LOCKED = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false };
+
+test('sandbox writes a settings file that turns the Bash sandbox on and forbids the unsandboxed retry', () => {
+	const { args, files } = buildCommand({ name: 'a', sandbox: true }, context);
+	const at = args.indexOf('--settings');
+	assert.equal(args[at + 1], '/out/e/runs/baseline-1/settings.json');
+	assert.deepEqual(JSON.parse(files.find((file) => file.path.endsWith('settings.json'))!.content), { sandbox: LOCKED });
+});
+
+test('sandbox merges into the settings of the config, and its locked keys win', () => {
+	const settings = { hooks: {}, sandbox: { enabled: false, allowUnsandboxedCommands: true, network: { allowedDomains: ['registry.npmjs.org'] } } };
+	const fromObject = buildCommand({ name: 'a', sandbox: true, settings }, context);
+	assert.equal(fromObject.args.filter((arg) => arg === '--settings').length, 1);
+	const expected = { hooks: {}, sandbox: { ...LOCKED, network: { allowedDomains: ['registry.npmjs.org'] } } };
+	assert.deepEqual(JSON.parse(fromObject.files.find((file) => file.path.endsWith('settings.json'))!.content), expected);
+	const fromFile = buildCommand({ name: 'a', sandbox: true, settings: '/s/settings.json' }, context, () => JSON.stringify(settings));
+	assert.deepEqual(JSON.parse(fromFile.files.find((file) => file.path.endsWith('settings.json'))!.content), expected);
+});
+
+test('sandbox with a settings file that is not a JSON object fails and names the file', () => {
+	assert.throws(() => buildCommand({ name: 'a', sandbox: true, settings: '/s/settings.json' }, context, () => '[1]'), /\/s\/settings\.json/);
+});
+
 test('setupFiles lists the CLAUDE.md source and the skill directories for the setup commit', () => {
 	assert.deepEqual(setupFiles({ name: 'a' }), { claudeMd: undefined, skills: [] });
 	assert.deepEqual(setupFiles({ name: 'a', claudeMd: { text: 'x' }, skills: ['/s/skills/x'] }), { claudeMd: { text: 'x' }, skills: ['/s/skills/x'] });

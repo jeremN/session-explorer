@@ -126,6 +126,7 @@ A field that is absent keeps the CLI default.
 | `allowedTools`, `disallowedTools` | `--allowedTools`, `--disallowedTools` |
 | `mcpConfig` (object or file) | `--mcp-config <path> --strict-mcp-config`. Without it, the runner passes an empty strict config. |
 | `bare` | `--bare`. It needs `ANTHROPIC_API_KEY`. Default false. |
+| `sandbox` | Turns on the Bash sandbox of Claude Code. The runner merges `sandbox.enabled`, `failIfUnavailable: true` and `allowUnsandboxedCommands: false` into `<run>/settings.json`, over the `settings` of the config. Default false. |
 
 The runner always adds `-p` (prompt on stdin), `--output-format json`, `--session-id`, `--max-budget-usd`, `--permission-prompts none`, `--setting-sources project,local` and `--disallowedTools "Bash(git push:*)"`. The `--setting-sources` flag keeps your user hooks and plugins out of every configuration.
 
@@ -150,6 +151,8 @@ Guards against an agent that tries to leave its clone:
 - The runner does not follow a symlink of the base commit when it writes `CLAUDE.md` or a skill. It refuses a skill path whose parent directory is a symlink, and it removes an existing skill directory before the copy.
 
 Residual risk: a process that the agent detaches into its own session leaves the process group, so the timeout does not kill it. It can outlive the run and overlap the acceptance command of the run and the next runs. The runner cannot contain it without an OS boundary. For an untrusted task, run the eval in a container, in a VM or as a dedicated user.
+
+With `sandbox: true`, the Bash commands of the agent and their child processes write only in the clone and have no network (macOS Seatbelt). A probe on Claude Code 2.1.325 checked it: a script that writes to `~/.cache` succeeds without the sandbox and fails with `EPERM` with it, and a write to the `$TMPDIR` of the runner fails too. A detached process stays in the sandbox, so it cannot reach the runner files or the source repository. Limits: Read, Edit and Write are not sandboxed (the permission rules guard them), and the `claude` process itself runs as your user.
 
 Known limit: the runner cleans the process group when the output of the agent closes, not when the agent exits. If the agent leaves a child in its group that keeps the output open, the runner waits until the timeout. The run then shows `timedOut: true` with an exit code of 0, and it counts as a timeout. The timeout still kills the group, so no child survives into the diff.
 
