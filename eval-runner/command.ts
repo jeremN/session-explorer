@@ -13,9 +13,10 @@ const ALWAYS_DISALLOWED = 'Bash(git push:*)';
 // The deny rule is a prefix rule: `git -C . push` or `env git push` bypass it. This environment turns off every git
 // transport for the agent, a local path included. An agent with a shell can still unset it, so the clone stays the main guard.
 // The Bash sandbox of Claude Code: commands and their children write only in the clone, with no network.
-// The runner locks these keys: no start without the sandbox, and no retry of a blocked command outside it.
+// The runner locks these keys: no start without the sandbox, no retry of a blocked command outside it, and no command
+// that runs outside it. The empty `excludedCommands` here also keeps out an exclusion from the settings of the clone.
 // Read, Edit and Write are not sandboxed; the permission rules guard them.
-const SANDBOX = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false };
+const SANDBOX = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [] as string[] };
 
 export const AGENT_ENV: Record<string, string> = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' };
 

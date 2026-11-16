@@ -69,7 +69,7 @@ test('settings and MCP config given as a file path are copied into the run direc
 	]);
 });
 
-const LOCKED = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false };
+const LOCKED = { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, excludedCommands: [] };
 
 test('sandbox writes a settings file that turns the Bash sandbox on and forbids the unsandboxed retry', () => {
 	const { args, files } = buildCommand({ name: 'a', sandbox: true }, context);
@@ -79,7 +79,7 @@ test('sandbox writes a settings file that turns the Bash sandbox on and forbids 
 });
 
 test('sandbox merges into the settings of the config, and its locked keys win', () => {
-	const settings = { hooks: {}, sandbox: { enabled: false, allowUnsandboxedCommands: true, network: { allowedDomains: ['registry.npmjs.org'] } } };
+	const settings = { hooks: {}, sandbox: { enabled: false, allowUnsandboxedCommands: true, excludedCommands: ['node:*'], network: { allowedDomains: ['registry.npmjs.org'] } } };
 	const fromObject = buildCommand({ name: 'a', sandbox: true, settings }, context);
 	assert.equal(fromObject.args.filter((arg) => arg === '--settings').length, 1);
 	const expected = { hooks: {}, sandbox: { ...LOCKED, network: { allowedDomains: ['registry.npmjs.org'] } } };
