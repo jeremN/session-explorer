@@ -83,7 +83,9 @@ test('eval diff runs before and after on the spec, writes diff.json, and stops a
 	await git(repo, 'commit', '-q', '-m', 'init');
 	writeFileSync(join(repo, 'CLAUDE.md'), 'new rules\n');
 	const spec = join(root, 'diff-spec.json');
-	writeFileSync(spec, JSON.stringify({ name: 'diff', task: { repo, prompt: 'x', timeoutSec: 60, acceptance: { command: 'grep -q "agent was here" agent-output.txt' } }, budget: { perRunUsd: 1, perEvalUsd: 30 }, configs: [{ name: 'baseline' }] }));
+	// The check script sits next to the spec, as in the examples: $EVAL_SPEC_DIR must name the folder of the spec.
+	writeFileSync(join(root, 'check.sh'), 'grep -q "agent was here" agent-output.txt\n');
+	writeFileSync(spec, JSON.stringify({ name: 'diff', task: { repo, prompt: 'x', timeoutSec: 60, acceptance: { command: 'sh "$EVAL_SPEC_DIR/check.sh"' } }, budget: { perRunUsd: 1, perEvalUsd: 30 }, configs: [{ name: 'baseline' }] }));
 	const out = join(root, 'out');
 	const previous = { projects: process.env.EVAL_RUNNER_PROJECTS_DIR, tmp: process.env.TMPDIR };
 	process.env.EVAL_RUNNER_PROJECTS_DIR = join(root, 'projects');
@@ -95,6 +97,7 @@ test('eval diff runs before and after on the spec, writes diff.json, and stops a
 		assert.equal(evals.length, 1);
 		const report = JSON.parse(readFileSync(join(out, evals[0], 'diff.json'), 'utf8'));
 		assert.equal(report.verdict, 'same');
+		assert.deepEqual(report.pass.before, { passed: 3, n: 3 });
 		assert.equal(report.runs, 3);
 		assert.deepEqual(report.file, realpathSync(join(repo, 'CLAUDE.md')));
 	} finally {

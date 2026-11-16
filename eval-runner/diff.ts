@@ -153,7 +153,8 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		let saved: { configs: Array<{ name: string } & ConfigStats>; runs: RunRecord[] } | undefined;
 		let runs = options.runs;
 		for (runs of rounds) {
-			last = await runEval([derived, '--runs', String(runs), '--claude', options.claude, '--out', options.out], exec);
+			// The derived spec lives in a temp folder; the check scripts sit next to the original spec.
+			last = await runEval([derived, '--runs', String(runs), '--claude', options.claude, '--out', options.out, '--spec-dir', spec.dir], exec);
 			if (!last.evalDir) return last.code || 1;
 			saved = JSON.parse(readFileSync(join(last.evalDir, 'eval.json'), 'utf8'));
 			const side = (name: string) => saved!.configs.find((config) => config.name === name)!;
@@ -176,6 +177,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 
 		const pass = (stats: ConfigStats) => `${stats.pass.passed}/${stats.pass.n}`;
 		console.log(`\n${target.path}: ${report.verdict} (${runs} runs per side). Pass: before ${pass(side('before'))}, after ${pass(side('after'))}.`);
+		if (side('before').pass.passed === 0) console.log('Warning: the before side never passed. Check the acceptance command before you read the verdict.');
 		if (report.skillLoads) console.log(`Skill ${skill} loaded: before ${report.skillLoads.before.join(' ')}, after ${report.skillLoads.after.join(' ')} (per run).`);
 		console.table(result!.metrics.map((row) => ({ metric: row.key, before: row.before, after: row.after, 'range before': `${row.min} to ${row.max}`, flag: row.outside ? 'outside the range' : '' })));
 		return last.code;

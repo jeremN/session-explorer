@@ -12,8 +12,8 @@ const root = mkdtempSync(join(tmpdir(), 'eval-cache-'));
 after(() => rmSync(root, { recursive: true, force: true }));
 
 const task: Spec['task'] = { repo: '/r', base: 'HEAD', prompt: 'Fix it.', timeoutSec: 900, acceptance: { command: 'npm test', timeoutSec: 300 } };
-const key = (overrides: { task?: Partial<Spec['task']>; config?: Record<string, unknown>; baseSha?: string; cli?: string } = {}) =>
-	cacheKey({ task: { ...task, ...overrides.task }, baseSha: overrides.baseSha ?? 'abc', config: { name: 'a', model: 'sonnet', ...overrides.config }, cliVersion: overrides.cli ?? '2.1.325' });
+const key = (overrides: { task?: Partial<Spec['task']>; config?: Record<string, unknown>; baseSha?: string; cli?: string; specDir?: string } = {}) =>
+	cacheKey({ task: { ...task, ...overrides.task }, baseSha: overrides.baseSha ?? 'abc', config: { name: 'a', model: 'sonnet', ...overrides.config }, cliVersion: overrides.cli ?? '2.1.325', specDir: overrides.specDir ?? '/specs' });
 
 test('the key ignores the config name and the repo path, and changes with what the agent gets', () => {
 	const same = key();
@@ -27,6 +27,8 @@ test('the key ignores the config name and the repo path, and changes with what t
 	assert.notEqual(key({ config: { model: 'opus' } }), same);
 	assert.notEqual(key({ config: { claudeMd: { text: 'Be terse.' } } }), same);
 	assert.notEqual(key({ cli: '2.1.326' }), same);
+	// The acceptance command finds its scripts through EVAL_SPEC_DIR.
+	assert.notEqual(key({ specDir: '/other' }), same);
 });
 
 test('a referenced file counts by its content, not by its path', () => {

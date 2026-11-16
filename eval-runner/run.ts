@@ -27,9 +27,10 @@ const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N]
   --no-cache    run every run, even when a finished run with the same task, config and CLI version exists
   --claude P    the claude executable (default: claude)
   --out DIR     where the results go (default: eval-runner/out)
+  --spec-dir D  the value of EVAL_SPEC_DIR (default: the folder of the spec file). eval diff sets it.
 `;
 
-type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; claude: string; out: string };
+type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; claude: string; out: string; specDir?: string };
 
 function parseArgs(argv: string[]): Options | 'help' {
 	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, claude: 'claude', out: join(import.meta.dirname, 'out') };
@@ -50,6 +51,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 		} else if (flag === '--only') options.only = value().split(',');
 		else if (flag === '--claude') options.claude = value();
 		else if (flag === '--out') options.out = resolve(value());
+		else if (flag === '--spec-dir') options.specDir = resolve(value());
 		else if (flag.startsWith('-')) throw new SpecError(`${flag}: unknown option`);
 		else if (options.specPath) throw new SpecError(`${flag}: only one spec file is allowed`);
 		else options.specPath = flag;
@@ -185,6 +187,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 			return { code: 0 };
 		}
 		spec = loadSpec(options.specPath);
+		if (options.specDir) spec.dir = options.specDir;
 		if (options.runs) spec.runs = options.runs;
 		if (options.only) {
 			const unknown = options.only.filter((name) => !spec.configs.some((config) => config.name === name));
@@ -209,7 +212,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const version = await exec(options.claude, ['--version']);
 	const cliVersion = version.code === 0 ? version.stdout.trim() : 'unknown';
 	const cacheDir = join(options.out, 'cache');
-	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion })]));
+	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion, specDir: spec.dir })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
 	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || cliVersion === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
 	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));

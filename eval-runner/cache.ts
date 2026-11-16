@@ -9,7 +9,7 @@ import type { Spec } from './spec.ts';
 import type { RunRecord } from './stats.ts';
 
 // Bump it when the runner changes what a run measures.
-const SCHEMA = 'eval-runner-cache/v1';
+const SCHEMA = 'eval-runner-cache/v2';
 const KEPT: ReadonlySet<RunRecord['status']> = new Set(['ok', 'timeout', 'budget']);
 
 export type CacheEntry = { evalId: string; record: RunRecord };
@@ -24,7 +24,7 @@ function contentOf(path: string): string {
 	return sha(files.map((name) => `${name}\0${sha(readFileSync(join(path, name)))}`).join('\n'));
 }
 
-export function cacheKey({ task, baseSha, config, cliVersion }: { task: Spec['task']; baseSha: string; config: Record<string, unknown>; cliVersion: string }) {
+export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task: Spec['task']; baseSha: string; config: Record<string, unknown>; cliVersion: string; specDir: string }) {
 	const { name: _name, ...rest } = config;
 	const files: Record<string, unknown> = { ...rest };
 	const claudeMd = rest.claudeMd as { file?: string } | undefined;
@@ -32,7 +32,7 @@ export function cacheKey({ task, baseSha, config, cliVersion }: { task: Spec['ta
 	for (const field of ['settings', 'mcpConfig'] as const) if (typeof rest[field] === 'string') files[field] = { content: contentOf(rest[field] as string) };
 	for (const field of ['skills', 'plugins'] as const) if (Array.isArray(rest[field])) files[field] = (rest[field] as string[]).map((path) => contentOf(path));
 	const prompt = task.prompt ?? (task.promptFile ? contentOf(task.promptFile) : '');
-	return sha(JSON.stringify({ schema: SCHEMA, baseSha, prompt, timeoutSec: task.timeoutSec, acceptance: task.acceptance, hiddenTests: task.hiddenTests ?? null, config: files, cliVersion }));
+	return sha(JSON.stringify({ schema: SCHEMA, baseSha, prompt, timeoutSec: task.timeoutSec, acceptance: task.acceptance, specDir, hiddenTests: task.hiddenTests ?? null, config: files, cliVersion }));
 }
 
 export function readCache(dir: string, key: string): CacheEntry[] {

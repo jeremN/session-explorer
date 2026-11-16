@@ -113,7 +113,7 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 
 ### Cache
 
-A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
+A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, spec folder (`EVAL_SPEC_DIR`), hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
 
 ### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
 
