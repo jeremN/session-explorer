@@ -63,6 +63,17 @@ test('bypassPermissions is refused, a known mode is kept', () => {
 	assert.equal(validateSpec({ ...base(), configs: [{ name: 'a', permissionMode: 'plan' }] }, '/s').configs[0].permissionMode, 'plan');
 });
 
+test('hiddenTests names a commit and relative paths that stay in the clone', () => {
+	const task = (hiddenTests: unknown) => ({ ...base(), task: { ...base().task, hiddenTests } });
+	assert.deepEqual(validateSpec(task({ commit: 'abc123', paths: ['test/a.test.ts'] }), '/s').task.hiddenTests, { commit: 'abc123', paths: ['test/a.test.ts'] });
+	assert.equal(validateSpec(base(), '/s').task.hiddenTests, undefined);
+	failure(task({ commit: 'abc123', paths: [] }), 'spec.task.hiddenTests.paths');
+	failure(task({ commit: 'abc123', paths: ['../x.ts'] }), 'spec.task.hiddenTests.paths');
+	failure(task({ commit: 'abc123', paths: ['/etc/x'] }), 'spec.task.hiddenTests.paths');
+	failure(task({ commit: 'abc123', paths: ['.git/hooks/x'] }), 'spec.task.hiddenTests.paths');
+	failure(task({ paths: ['a.ts'] }), 'spec.task.hiddenTests.commit');
+});
+
 test('sandbox is an optional boolean', () => {
 	assert.equal(validateSpec({ ...base(), configs: [{ name: 'a', sandbox: true }] }, '/s').configs[0].sandbox, true);
 	assert.equal(validateSpec(base(), '/s').configs[0].sandbox, undefined);

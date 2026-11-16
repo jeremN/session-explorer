@@ -14,7 +14,7 @@ import { SpecError, loadSpec } from './spec.ts';
 import type { Config, Spec } from './spec.ts';
 import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
-import { collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
+import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
 const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]
 
@@ -133,6 +133,10 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		await removeWorkspace(gitDir);
 		writeFileSync(join(runDir, 'diff.patch'), patch);
 		record.diff = diff;
+
+		// The hidden tests enter after the diff, so they never count as agent work.
+		const hidden = spec.task.hiddenTests;
+		if (hidden) await placeHiddenTests(exec, { repo: spec.task.repo, commit: hidden.commit, paths: hidden.paths, dir: clone });
 
 		const checkStarted = Date.now();
 		const check = await exec('sh', ['-c', spec.task.acceptance.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.acceptance.timeoutSec * 1000 });

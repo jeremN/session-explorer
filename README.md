@@ -106,6 +106,7 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 | `task.timeoutSec` | Time limit of the agent. Default 900. |
 | `task.acceptance.command` | Required. It runs in the clone after the agent stops, with `EVAL_SPEC_DIR` set. Exit code 0 means passed. Keep the check script next to the spec, outside the clone. |
 | `task.acceptance.timeoutSec` | Default 300. |
+| `task.hiddenTests` | Optional `{ commit, paths }`. The runner copies these files from `commit` in `task.repo` into the clone after the agent stops and after the diff, then runs the acceptance command. Use it for a task mined from a past session: `commit` is the solution, `paths` are its tests. |
 | `budget.perRunUsd`, `budget.perEvalUsd` | Both required. |
 | `runs` | Runs per configuration, 1 to 20. Default 3. |
 | `configs` | 1 to 8 configurations with unique names. |
@@ -158,7 +159,7 @@ Known limit: the runner cleans the process group when the output of the agent cl
 
 Residual risk: an agent with shell access can unset the environment variables and delete the hook. It can also use absolute paths to reach files outside the clone; the permission system of the CLI is the guard for that, not the runner. The acceptance command runs code from the clone by design. The isolation of the clone (no remote, no shared objects, a git dir that the runner owns) is the main guard.
 
-The clone keeps only the base commit and its ancestors. The runner deletes every other ref, expires the reflogs and runs `git gc --prune=now`, so a later commit (the solution of a task mined from a past session) is not readable in the clone. On a large repository, this gc adds time to the setup of each run.
+The clone keeps only the base commit and its ancestors. The runner makes an empty repository and fetches the base commit only, so a later commit (the solution of a task mined from a past session) is not in the clone: no ref, no object. The fetch writes a new pack, so no object file is shared with the source repository.
 
 Deferred: OS-level containment (a container, a VM or a dedicated user started by the runner).
 

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { realExec } from './exec.ts';
-import { collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
+import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
 let root: string;
 let repo: string;
@@ -72,6 +72,35 @@ test('the clone holds no commit after the base: no ref, no reflog, no object', a
 		assert.doesNotMatch(subjects, /future/);
 		assert.match(subjects, /base/);
 	}
+});
+
+test('placeHiddenTests writes the files of the solution commit and replaces what the agent put there', async () => {
+	const source = join(root, 'with-solution');
+	mkdirSync(source);
+	await git(source, 'init', '-q', '-b', 'main');
+	await git(source, 'config', 'user.email', 'test@localhost');
+	await git(source, 'config', 'user.name', 'test');
+	writeFileSync(join(source, 'a.txt'), 'base\n');
+	await git(source, 'add', '-A');
+	await git(source, 'commit', '-q', '-m', 'base');
+	mkdirSync(join(source, 'test'));
+	writeFileSync(join(source, 'test', 'a.test.sh'), 'hidden test\n');
+	await git(source, 'add', '-A');
+	await git(source, 'commit', '-q', '-m', 'solution');
+	const solution = await git(source, 'rev-parse', 'HEAD');
+
+	const dir = join(root, 'clones', 'hidden');
+	mkdirSync(join(dir, 'test'), { recursive: true });
+	symlinkSync('/etc/hosts', join(dir, 'test', 'a.test.sh'));
+	await placeHiddenTests(realExec, { repo: source, commit: solution, paths: ['test/a.test.sh'], dir });
+	assert.equal(lstatSync(join(dir, 'test', 'a.test.sh')).isSymbolicLink(), false);
+	assert.equal(readFileSync(join(dir, 'test', 'a.test.sh'), 'utf8'), 'hidden test\n');
+
+	const linked = join(root, 'clones', 'hidden-linked');
+	mkdirSync(linked, { recursive: true });
+	symlinkSync(join(root, 'outside'), join(linked, 'test'));
+	await assert.rejects(() => placeHiddenTests(realExec, { repo: source, commit: solution, paths: ['test/a.test.sh'], dir: linked }), /symlink/);
+	await assert.rejects(() => placeHiddenTests(realExec, { repo: source, commit: solution, paths: ['test/missing.sh'], dir }), /test\/missing\.sh/);
 });
 
 test('resolveBase turns a commit-ish into a SHA and refuses an unknown one', async () => {
@@ -170,7 +199,7 @@ test('R1: a skill destination that passes through a symlink is refused', async (
 test('S1: the clone does not share object files with the source repository', async () => {
 	const dir = join(root, 'clones', 's1');
 	await createWorkspace(realExec, { repo, baseSha: base, dir, gitDir: gitDirOf('s1'), setup: plain });
-	// gc packs the objects of the clone, so the test compares every file, not one object path.
+	// The fetch writes its own pack, so the test compares every file, not one object path.
 	const inodes = (top: string) => new Set(readdirSync(top, { recursive: true }).map((name) => statSync(join(top, String(name)))).filter((entry) => entry.isFile()).map((entry) => `${entry.dev}:${entry.ino}`));
 	const source = inodes(join(repo, '.git', 'objects'));
 	const shared = [...inodes(join(dir, '.git', 'objects'))].filter((inode) => source.has(inode));

@@ -49,24 +49,35 @@ function refuseSymlinks(dir: string, relative: string) {
 	}
 }
 
-// A task mined from a past session has its solution in a later commit. The clone keeps only the base and its
-// ancestors: every ref goes, the reflogs expire, and gc drops the objects that nothing reaches.
-async function cutHistory(exec: Exec, dir: string) {
-	const refs = (await git(exec, dir, ['for-each-ref', '--format=%(refname)'])).split('\n').filter(Boolean);
-	for (const ref of refs) await git(exec, dir, ['update-ref', '-d', ref]);
-	await git(exec, dir, ['reflog', 'expire', '--expire=now', '--all']);
-	await git(exec, dir, ['gc', '-q', '--prune=now']);
+// Hidden tests come from the solution commit of a mined task. They enter the clone after the agent stops, so the agent
+// never reads them. The clone is hostile by then: a file or a parent directory can be a symlink.
+export async function placeHiddenTests(exec: Exec, { repo, commit, paths, dir }: { repo: string; commit: string; paths: string[]; dir: string }) {
+	for (const path of paths) {
+		const shown = await exec('git', ['show', `${commit}:${path}`], { cwd: repo, env: ENV });
+		if (shown.code !== 0) throw new Error(`hiddenTests: ${path} is not in commit ${commit}`);
+		refuseSymlinks(dir, path);
+		const target = join(dir, path);
+		mkdirSync(dirname(target), { recursive: true });
+		refuseSymlinks(dir, path);
+		// rmSync removes a symlink itself, never its target.
+		rmSync(target, { recursive: true, force: true });
+		writeFileSync(target, shown.stdout);
+	}
 }
 
 // `gitDir` is the copy of the git dir that the runner keeps outside the clone, at a path the agent never gets.
 // collectDiff uses only that copy.
 export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, setup }: { repo: string; baseSha: string; dir: string; gitDir: string; setup: Setup }) {
 	mkdirSync(dirname(dir), { recursive: true });
-	// `--no-hardlinks`: a hard link would let a write in the clone reach the object files of the source repository.
-	await git(exec, dirname(dir), ['clone', '--local', '--no-hardlinks', '--no-checkout', repo, dir]);
-	await git(exec, dir, ['remote', 'remove', 'origin']);
-	await git(exec, dir, ['checkout', '--detach', baseSha]);
-	await cutHistory(exec, dir);
+	// A task mined from a past session has its solution in a later commit. The clone fetches the base commit only, so it
+	// holds the base and its ancestors and nothing else: no later commit, no ref, no remote. The fetch writes a new pack,
+	// so no object file is shared with the source repository.
+	mkdirSync(dir, { recursive: true });
+	await git(exec, dir, ['init', '-q']);
+	await git(exec, dir, ['fetch', '-q', '--no-tags', repo, baseSha]);
+	await git(exec, dir, ['checkout', '-q', '--detach', baseSha]);
+	// FETCH_HEAD names the path of the source repository.
+	rmSync(join(dir, '.git', 'FETCH_HEAD'), { force: true });
 	if (setup.claudeMd) {
 		// Remove first: writeFileSync would follow a symlink and write outside the clone.
 		rmSync(join(dir, 'CLAUDE.md'), { force: true });

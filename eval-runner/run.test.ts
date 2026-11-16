@@ -173,6 +173,30 @@ test('the runner passes the argv and the prompt to the CLI, in the clone', async
 	assert.match(cwd, /eval-runner\/.+\/baseline-1$/);
 });
 
+test('hidden tests come from the solution commit after the agent stops, and stay out of the diff', async () => {
+	const source = join(root, 'repo-hidden');
+	mkdirSync(source);
+	await git(source, 'init', '-q', '-b', 'main');
+	await git(source, 'config', 'user.email', 'test@localhost');
+	await git(source, 'config', 'user.name', 'test');
+	writeFileSync(join(source, 'a.txt'), 'one\n');
+	await git(source, 'add', '-A');
+	await git(source, 'commit', '-q', '-m', 'init');
+	const baseSha = (await realExec('git', ['rev-parse', 'HEAD'], { cwd: source })).stdout.trim();
+	writeFileSync(join(source, 'hidden.test.sh'), 'grep -q "agent was here" agent-output.txt\n');
+	await git(source, 'add', '-A');
+	await git(source, 'commit', '-q', '-m', 'solution');
+	const solution = (await realExec('git', ['rev-parse', 'HEAD'], { cwd: source })).stdout.trim();
+	const out = join(root, 'out-hidden');
+	const spec = writeSpec('hidden', { runs: 1, task: { repo: source, base: baseSha, prompt: 'x', timeoutSec: 60, hiddenTests: { commit: solution, paths: ['hidden.test.sh'] }, acceptance: { command: 'sh hidden.test.sh' } } });
+	const result = await cli([spec, '--claude', FAKE, '--out', out, '--only', 'baseline']);
+	assert.equal(result.code, 0, result.stderr);
+	const [run] = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8')).runs;
+	assert.equal(run.acceptance.passed, true);
+	assert.deepEqual(run.diff, { files: 1, added: 1, deleted: 0 });
+	assert.doesNotMatch(readFileSync(join(evalDir(out), 'runs', run.id, 'diff.patch'), 'utf8'), /hidden\.test\.sh/);
+});
+
 test('R2: a run with no CLI cost reserves its full cap, so the eval cap holds', async () => {
 	const out = join(root, 'out-r2');
 	const spec = writeSpec('nocost', { runs: 3, budget: { perRunUsd: 1, perEvalUsd: 2 }, task: { repo, prompt: 'x', timeoutSec: 1, acceptance: { command: 'true' } } });

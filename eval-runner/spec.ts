@@ -26,7 +26,7 @@ export type Config = {
 export type Spec = {
 	name: string;
 	dir: string;
-	task: { repo: string; base: string; prompt?: string; promptFile?: string; timeoutSec: number; acceptance: { command: string; timeoutSec: number } };
+	task: { repo: string; base: string; prompt?: string; promptFile?: string; timeoutSec: number; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
 	budget: { perRunUsd: number; perEvalUsd: number };
 	runs: number;
 	configs: Config[];
@@ -65,11 +65,23 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
-	const task = object(spec.task, 'spec.task', ['repo', 'base', 'prompt', 'promptFile', 'timeoutSec', 'acceptance']);
+	const task = object(spec.task, 'spec.task', ['repo', 'base', 'prompt', 'promptFile', 'timeoutSec', 'acceptance', 'hiddenTests']);
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
 	const acceptance = object(task.acceptance, 'spec.task.acceptance', ['command', 'timeoutSec']);
+	let hiddenTests: { commit: string; paths: string[] } | undefined;
+	if (task.hiddenTests !== undefined && task.hiddenTests !== null) {
+		const hidden = object(task.hiddenTests, 'spec.task.hiddenTests', ['commit', 'paths']);
+		const paths = strings(hidden.paths, 'spec.task.hiddenTests.paths');
+		if (paths.length === 0) fail('spec.task.hiddenTests.paths', 'required non-empty array');
+		// A hidden test is written into the clone: it must stay inside it, and out of the git dir.
+		for (const path of paths) {
+			const parts = path.split('/');
+			if (path.startsWith('/') || parts.includes('..') || parts.includes('') || parts[0] === '.git') fail('spec.task.hiddenTests.paths', `${path} must be a relative path inside the clone, outside .git`);
+		}
+		hiddenTests = { commit: string(hidden.commit, 'spec.task.hiddenTests.commit'), paths };
+	}
 
 	const budget = object(spec.budget, 'spec.budget', ['perRunUsd', 'perEvalUsd']);
 	const runs = optional(spec.runs, 'spec.runs', (value, field) => number(value, field, 1, 20, true)) ?? 3;
@@ -133,7 +145,8 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			acceptance: {
 				command: string(acceptance.command, 'spec.task.acceptance.command'),
 				timeoutSec: optional(acceptance.timeoutSec, 'spec.task.acceptance.timeoutSec', (value, field) => number(value, field, 1)) ?? 300
-			}
+			},
+			...(hiddenTests === undefined ? {} : { hiddenTests })
 		},
 		budget: {
 			perRunUsd: number(budget.perRunUsd, 'spec.budget.perRunUsd', 0.000001),
