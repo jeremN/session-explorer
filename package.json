@@ -14,6 +14,7 @@
     "trace": "node context-tracer/tracer.ts",
     "heartbeat": "node hook-heartbeat/heartbeat.ts",
     "eval": "node eval-runner/run.ts",
-    "eval:mine": "node eval-runner/mine.ts"
+    "eval:mine": "node eval-runner/mine.ts",
+    "eval:diff": "node eval-runner/diff.ts"
   }
 }

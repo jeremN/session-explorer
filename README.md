@@ -115,6 +115,16 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 
 A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
 
+### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
+
+`npm run eval:diff -- <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10]` runs the task of the spec twice per round: `before` gets the file as it is at `HEAD`, `after` gets the working tree. Both start from the first config of the spec (or `--config`).
+
+- A file (`CLAUDE.md`, `AGENTS.md`) becomes the CLAUDE.md of the clone. A directory is a skill: it replaces the skill of the config with the same directory name.
+- Verdict: `same` when the pass counts are equal, `better` or `worse` when the gap is half the runs or more, `borderline` otherwise. A borderline result gets more runs (3, then 6, then 10). The cache reuses the earlier runs, so a round pays only for the new ones.
+- A metric is flagged when its median after the change is outside the range of the `before` runs.
+- For a skill, the report also lists how many times the skill loaded in each run. A skill that never loads cannot help.
+- The report goes to `diff.json` in the eval directory. It informs; it does not block anything.
+
 ### Mine tasks from your sessions
 
 `npm run eval:mine -- [--days 30] [--projects <regex>] [--out <file>]` reads your local Claude Code sessions and writes candidate tasks to `eval-runner/out/candidates.json` (gitignored). A task is a candidate when:

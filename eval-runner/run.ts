@@ -171,13 +171,18 @@ function writeIndex(out: string) {
 }
 
 export async function main(argv: string[], exec: Exec = realExec): Promise<number> {
+	return (await runEval(argv, exec)).code;
+}
+
+// Same as main, and it names the eval directory, so a caller (eval diff) can read the result.
+export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ code: number; evalDir?: string }> {
 	let options: Options | 'help';
 	let spec: Spec;
 	try {
 		options = parseArgs(argv);
 		if (options === 'help') {
 			console.log(USAGE);
-			return 0;
+			return { code: 0 };
 		}
 		spec = loadSpec(options.specPath);
 		if (options.runs) spec.runs = options.runs;
@@ -189,7 +194,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	} catch (error) {
 		if (!(error instanceof SpecError)) throw error;
 		console.error(`${error.message}\n\n${USAGE}`);
-		return error.exitCode;
+		return { code: error.exitCode };
 	}
 
 	let baseSha: string;
@@ -197,7 +202,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		baseSha = await resolveBase(exec, spec.task.repo, spec.task.base);
 	} catch (error) {
 		console.error((error as Error).message);
-		return 2;
+		return { code: 2 };
 	}
 	const evalId = evalIdOf(spec.name);
 	const evalDir = join(options.out, evalId);
@@ -217,7 +222,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		console.log(`${run.id} config=${run.config.name} model=${run.config.model ?? 'default'} clone=${join(tmpdir(), 'eval-runner', evalId, run.id)} argv: ${options.claude} ${args.join(' ')}`);
 	}
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
-	if (options.dryRun) return 0;
+	if (options.dryRun) return { code: 0 };
 
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	mkdirSync(join(evalDir, 'runs'), { recursive: true });
@@ -263,7 +268,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	}
 	if ((await sourceStatus(exec, spec.task.repo)) !== statusBefore) console.error(`Warning: the working tree of ${spec.task.repo} changed during the eval.`);
 	console.log(`Spent ${dollars(spent)} $. Results in ${evalDir}`);
-	return anyFailed ? 1 : 0;
+	return { code: anyFailed ? 1 : 0, evalDir };
 }
 
 if (import.meta.main) process.exitCode = await main(process.argv.slice(2));
