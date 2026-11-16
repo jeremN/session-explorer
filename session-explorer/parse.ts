@@ -1,5 +1,5 @@
 // Turns the rows of one Claude Code session, subagents included, into a flat event list.
-import { classify, isUserPrompt } from '../context-tracer/tracer.ts';
+import { OUTAGE, classify, isUserPrompt } from '../context-tracer/tracer.ts';
 import type { Tokens } from './price.ts';
 
 export type Kind = 'prompt' | 'llm' | 'tool' | 'edit' | 'error' | 'subagent' | 'interrupt';
@@ -14,7 +14,7 @@ export type SessionEvent = {
 	mark?: 'brain' | 'memory';
 	msg?: string;
 	// On an error: the user refused the call, or the permission system denied it.
-	refusal?: 'user' | 'system';
+	refusal?: 'user' | 'system' | 'outage';
 	model?: string;
 	tok?: Tokens;
 	cost?: number | null;
@@ -148,8 +148,15 @@ export function parseSession(entries: unknown[], subagents: Record<string, Agent
 				if (block?.type !== 'tool_result' || !block.is_error) continue;
 				const failed = callById.get(text(block.tool_use_id));
 				if (!failed) continue;
+				const msg = firstLine(block.content);
+				// The platform failed, not the agent: the call keeps its kind and is not an error.
+				if (OUTAGE.test(msg)) {
+					failed.refusal = 'outage';
+					failed.msg = msg;
+					continue;
+				}
 				failed.kind = 'error';
-				failed.msg = firstLine(block.content);
+				failed.msg = msg;
 				const refusal = USER_REFUSAL.test(failed.msg) ? 'user' : SYSTEM_DENIAL.test(failed.msg) ? 'system' : undefined;
 				if (refusal) failed.refusal = refusal;
 			}

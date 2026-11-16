@@ -252,3 +252,25 @@ test('traceTasks: the result of the last check gives passed, failed or unknown',
 	]);
 	assert.deepEqual(tasks.map((task) => task.check), ['failed', 'passed', 'failed', 'failed', 'unknown', 'passed', undefined]);
 });
+
+test('traceTasks: a check blocked by a classifier outage never ran, so it proves nothing', () => {
+	const run = (minute: number, id: string) => ({
+		type: 'assistant',
+		timestamp: at(minute),
+		message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'node --test a.test.ts' } }] }
+	});
+	const output = (minute: number, id: string, content: string, isError = false) => ({
+		type: 'user',
+		timestamp: at(minute),
+		message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content }] }
+	});
+	const outage = 'The server-side auto mode classifier gave no verdict (error), so auto mode cannot determine the safety of Bash. This is a transient failure of the check, not a judgment about the action.';
+	const { tasks } = traceTasks([
+		prompt(0), repoEdit(1), run(2, 'a'), output(3, 'a', 'ℹ pass 3\nℹ fail 0'), run(4, 'b'), output(5, 'b', outage, true),
+		prompt(10, 'b'), repoEdit(11), run(12, 'c'), output(13, 'c', outage, true)
+	]);
+	assert.deepEqual(tasks.map(({ verified, verifiedAt, check }) => ({ verified, verifiedAt, check })), [
+		{ verified: true, verifiedAt: at(2), check: 'passed' },
+		{ verified: false, verifiedAt: undefined, check: undefined }
+	]);
+});

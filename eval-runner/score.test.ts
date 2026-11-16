@@ -20,6 +20,7 @@ test('scoreRun gives the metrics of the synthetic transcript', () => {
 		cacheReadShare: 0.49,
 		errors: 1,
 		denials: 0,
+		outages: 0,
 		verified: 1,
 		failed: 0,
 		loops: 0,

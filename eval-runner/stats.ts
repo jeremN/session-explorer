@@ -6,6 +6,7 @@ export type RunMetrics = {
 	cacheReadShare: number;
 	errors: number;
 	denials: number;
+	outages: number;
 	verified: number;
 	failed: number;
 	loops: number;
@@ -56,6 +57,7 @@ const PICK: Record<string, (run: RunRecord) => number | undefined> = {
 	wallSec: (run) => run.wallSec,
 	errors: (run) => run.metrics?.errors,
 	denials: (run) => run.metrics?.denials,
+	outages: (run) => run.metrics?.outages,
 	loops: (run) => run.metrics?.loops,
 	retries: (run) => run.metrics?.retries,
 	subagentCost: (run) => run.metrics?.subagentCost,

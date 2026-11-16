@@ -12,6 +12,7 @@ const ROWS = [
 	['wallSec', 'Durée (s)', (n) => String(Math.round(n)), 'low'],
 	['errors', 'Erreurs', dec, 'low'],
 	['denials', 'Refus système', dec, 'low'],
+	['outages', 'Pannes du classifieur', dec, null],
 	['loops', 'Boucles', dec, 'low'],
 	['retries', 'Relances', dec, 'low'],
 	['subagentCost', 'Coût sous-agents', (n) => n.toFixed(2), 'low'],

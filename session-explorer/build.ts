@@ -55,6 +55,7 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 		interrupts: count((event) => event.kind === 'interrupt'),
 		refusals: count((event) => event.refusal === 'user'),
 		denials: count((event) => event.refusal === 'system'),
+		outages: count((event) => event.refusal === 'outage'),
 		subagents: parsed.agents.length,
 		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never'), verified: tasks.filter((task) => task.verified).length, failed: tasks.filter((task) => task.check === 'failed').length },
 		mrs: [] as string[]

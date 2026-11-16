@@ -24,6 +24,7 @@ export function scoreRun(entries: unknown[], subagentMeta: Record<string, AgentM
 		cacheReadShare: summary.cacheReadShare,
 		errors: summary.errors,
 		denials: summary.denials,
+		outages: summary.outages,
 		verified: summary.tasks.verified,
 		failed: summary.tasks.failed,
 		loops: waste.loops.length,

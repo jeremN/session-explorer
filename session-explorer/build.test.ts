@@ -61,6 +61,7 @@ test('summarizeSession: one index row', () => {
 		interrupts: 1,
 		refusals: 1,
 		denials: 1,
+		outages: 0,
 		subagents: 1,
 		tasks: { before: 1, after: 0, never: 2, verified: 2, failed: 1 },
 		mrs: []

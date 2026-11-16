@@ -242,3 +242,15 @@ test('a refused call carries who refused it: the user or the permission system',
 		['user', 'system', undefined, 'system', 'system']
 	);
 });
+
+test('a call blocked by an outage of the auto mode classifier is an outage, not an error', () => {
+	const session = parseSession([
+		assistant(1, 'msg_1', [call('t1', 'Bash', { command: 'node --test a.test.ts' }), call('t2', 'Bash', { command: 'ls nope' })]),
+		result(2, 't1', 'The server-side auto mode classifier gave no verdict (error), so auto mode cannot determine the safety of Bash. This is a transient failure of the check, not a judgment about the action.'),
+		result(2, 't2', 'ls: nope: No such file or directory')
+	]);
+	assert.deepEqual(
+		session?.events.filter((event) => event.kind !== 'llm').map((event) => [event.kind, event.refusal]),
+		[['tool', 'outage'], ['error', undefined]]
+	);
+});

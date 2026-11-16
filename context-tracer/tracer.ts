@@ -72,6 +72,8 @@ const VERIFY = new RegExp(
 );
 
 // A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.
+// The auto mode classifier had no answer, so the call never ran. Its result is not an outcome of the command.
+export const OUTAGE = /^The server-side auto mode classifier gave no verdict/;
 const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -137,6 +139,7 @@ export function isUserPrompt(entry: Record<string, any>) {
 export function traceTasks(entries: unknown[]): { start: string | undefined; tasks: TaskSpan[] } {
 	const events: Array<{ timestamp: string; kind: EventKind | 'prompt'; id?: string }> = [];
 	const results = new Map<string, Check>();
+	const blocked = new Set<string>();
 	let start: string | undefined;
 	let last = '';
 	for (const entry of entries as Array<Record<string, any>>) {
@@ -150,6 +153,10 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 		if (entry.type === 'user') {
 			for (const block of content) {
 				if (block?.type !== 'tool_result') continue;
+				if (block.is_error && OUTAGE.test(resultText(block.content))) {
+					blocked.add(text(block.tool_use_id));
+					continue;
+				}
 				results.set(text(block.tool_use_id), block.is_error || FAILURE.test(resultText(block.content)) ? 'failed' : 'passed');
 			}
 			continue;
@@ -161,6 +168,8 @@ export function traceTasks(entries: unknown[]): { start: string | undefined; tas
 			if (kind) events.push({ timestamp, kind, id: text(block.id) });
 		}
 	}
+	// A call that the classifier outage blocked did not happen: it is neither an edit nor a check.
+	if (blocked.size > 0) events.splice(0, events.length, ...events.filter((event) => event.id === undefined || !blocked.has(event.id)));
 	events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
 	const tasks: TaskSpan[] = [];

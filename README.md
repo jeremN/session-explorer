@@ -192,6 +192,7 @@ All thresholds are choices, not measured optima. They are constants at the top o
 - **Verified task.** A test, build, lint or typecheck command ran after the last edit of the task: `npm|pnpm|yarn|bun test|build|lint|check|typecheck`, `tsc`, `vitest`, `jest`, `eslint`, `svelte-check`, `playwright test`, `node --test`, `pytest`, `mypy`, `ruff`, `cargo test|check|build|clippy`, `go test|build|vet`. An edit after the check cancels it. `check` gives the result of that last command: `failed` when it exits with an error, or when its output holds a failure line (`FAIL `, `2 failed`, `3 errors`, `error TS2304`), because `| tail` hides the exit code; `passed` otherwise; `unknown` when it has no result (interrupted, still running).
 - **Interruption.** You stopped the agent (`[Request interrupted by user]`).
 - **Refusal.** You refused a tool call (`refusals`), or the permission system denied it (`denials`: auto mode classifier, safety check, permission rule).
+- **Classifier outage.** The auto mode classifier gave no verdict, so the call never ran (`outages`). An outage is not an error of the agent. A check that an outage blocked does not verify the task.
 - **Created merge request or pull request.** The first mention of a merge request, over all sessions in the window, comes from a creating command:
   - GitLab: a `remote:` line after `git push -o merge_request.create`. The line counts even when a later command of the same call failed;
   - GitHub: a line that starts with the pull request URL after `gh pr create`. A failed call creates nothing: it prints the URL of the pull request that already exists.
@@ -276,7 +277,7 @@ The hook prices the request with `session-explorer/price.ts`. Any failure ends w
 
 | File | Content |
 |---|---|
-| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, task verdicts with `tasks.verified` and `tasks.failed`, `mrs`. Totals of the waste signals. |
+| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, `outages`, task verdicts with `tasks.verified` and `tasks.failed`, `mrs`. Totals of the waste signals. |
 | `out/sessions/<id>.json` | The event list of one session, for the viewer. |
 | `out/waste.json` | One row per finding. |
 
