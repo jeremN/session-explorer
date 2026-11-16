@@ -49,6 +49,15 @@ function refuseSymlinks(dir: string, relative: string) {
 	}
 }
 
+// A task mined from a past session has its solution in a later commit. The clone keeps only the base and its
+// ancestors: every ref goes, the reflogs expire, and gc drops the objects that nothing reaches.
+async function cutHistory(exec: Exec, dir: string) {
+	const refs = (await git(exec, dir, ['for-each-ref', '--format=%(refname)'])).split('\n').filter(Boolean);
+	for (const ref of refs) await git(exec, dir, ['update-ref', '-d', ref]);
+	await git(exec, dir, ['reflog', 'expire', '--expire=now', '--all']);
+	await git(exec, dir, ['gc', '-q', '--prune=now']);
+}
+
 // `gitDir` is the copy of the git dir that the runner keeps outside the clone, at a path the agent never gets.
 // collectDiff uses only that copy.
 export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, setup }: { repo: string; baseSha: string; dir: string; gitDir: string; setup: Setup }) {
@@ -57,6 +66,7 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	await git(exec, dirname(dir), ['clone', '--local', '--no-hardlinks', '--no-checkout', repo, dir]);
 	await git(exec, dir, ['remote', 'remove', 'origin']);
 	await git(exec, dir, ['checkout', '--detach', baseSha]);
+	await cutHistory(exec, dir);
 	if (setup.claudeMd) {
 		// Remove first: writeFileSync would follow a symlink and write outside the clone.
 		rmSync(join(dir, 'CLAUDE.md'), { force: true });

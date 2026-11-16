@@ -158,6 +158,8 @@ Known limit: the runner cleans the process group when the output of the agent cl
 
 Residual risk: an agent with shell access can unset the environment variables and delete the hook. It can also use absolute paths to reach files outside the clone; the permission system of the CLI is the guard for that, not the runner. The acceptance command runs code from the clone by design. The isolation of the clone (no remote, no shared objects, a git dir that the runner owns) is the main guard.
 
+The clone keeps only the base commit and its ancestors. The runner deletes every other ref, expires the reflogs and runs `git gc --prune=now`, so a later commit (the solution of a task mined from a past session) is not readable in the clone. On a large repository, this gc adds time to the setup of each run.
+
 Deferred: OS-level containment (a container, a VM or a dedicated user started by the runner).
 
 ### Output

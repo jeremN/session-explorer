@@ -47,6 +47,33 @@ test('the setup commit starts no git auto maintenance, so the runner copy of the
 	assert.deepEqual([await read('maintenance.auto'), await read('gc.auto')], ['false', '0']);
 });
 
+test('the clone holds no commit after the base: no ref, no reflog, no object', async () => {
+	const source = join(root, 'with-future');
+	mkdirSync(source);
+	await git(source, 'init', '-q', '-b', 'main');
+	await git(source, 'config', 'user.email', 'test@localhost');
+	await git(source, 'config', 'user.name', 'test');
+	writeFileSync(join(source, 'a.txt'), 'base\n');
+	await git(source, 'add', '-A');
+	await git(source, 'commit', '-q', '-m', 'base');
+	const baseSha = await git(source, 'rev-parse', 'HEAD');
+	writeFileSync(join(source, 'a.txt'), 'the solution\n');
+	await git(source, 'commit', '-q', '-am', 'future');
+	const future = await git(source, 'rev-parse', 'HEAD');
+	await git(source, 'tag', 'v-future');
+	await git(source, 'branch', 'side', future);
+
+	const dir = join(root, 'clones', 'history-cut');
+	const gitDir = gitDirOf('history-cut');
+	await createWorkspace(realExec, { repo: source, baseSha, dir, gitDir, setup: { claudeMd: undefined, skills: [] } });
+	for (const where of [{ cwd: dir }, { cwd: dir, env: { GIT_DIR: gitDir } }]) {
+		assert.notEqual((await realExec('git', ['cat-file', '-e', future], where)).code, 0, 'the future commit is readable');
+		const subjects = (await realExec('git', ['log', '--all', '--reflog', '--format=%s'], where)).stdout;
+		assert.doesNotMatch(subjects, /future/);
+		assert.match(subjects, /base/);
+	}
+});
+
 test('resolveBase turns a commit-ish into a SHA and refuses an unknown one', async () => {
 	assert.equal(await resolveBase(realExec, repo, 'HEAD'), base);
 	await assert.rejects(() => resolveBase(realExec, repo, 'no-such-ref'), /no-such-ref/);
@@ -143,10 +170,12 @@ test('R1: a skill destination that passes through a symlink is refused', async (
 test('S1: the clone does not share object files with the source repository', async () => {
 	const dir = join(root, 'clones', 's1');
 	await createWorkspace(realExec, { repo, baseSha: base, dir, gitDir: gitDirOf('s1'), setup: plain });
-	const objects = join(repo, '.git', 'objects');
-	const folder = readdirSync(objects).find((name) => /^[0-9a-f]{2}$/.test(name))!;
-	const file = readdirSync(join(objects, folder))[0];
-	assert.notEqual(statSync(join(dir, '.git', 'objects', folder, file)).ino, statSync(join(objects, folder, file)).ino);
+	// gc packs the objects of the clone, so the test compares every file, not one object path.
+	const inodes = (top: string) => new Set(readdirSync(top, { recursive: true }).map((name) => statSync(join(top, String(name)))).filter((entry) => entry.isFile()).map((entry) => `${entry.dev}:${entry.ino}`));
+	const source = inodes(join(repo, '.git', 'objects'));
+	const shared = [...inodes(join(dir, '.git', 'objects'))].filter((inode) => source.has(inode));
+	assert.ok(source.size > 0);
+	assert.deepEqual(shared, []);
 	await removeWorkspace(dir);
 });
 
