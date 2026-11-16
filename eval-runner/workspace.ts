@@ -9,7 +9,8 @@ import type { Config } from './spec.ts';
 type Setup = { claudeMd: Config['claudeMd']; skills: string[] };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
-const ENV = { GIT_TERMINAL_PROMPT: '0' };
+// No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
+const ENV = { GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0' };
 
 // After the agent started, everything in the clone is hostile, `.git` included: it can be a symlink, a `gitdir:` file,
 // or hold the config, hooks and attributes of the agent. So the runner never reads or writes the `.git` of the clone

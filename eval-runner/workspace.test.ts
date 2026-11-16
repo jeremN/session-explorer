@@ -33,6 +33,20 @@ after(() => rmSync(root, { recursive: true, force: true }));
 // The runner keeps its copy of the git dir outside the clone, where the agent does not work.
 const gitDirOf = (name: string) => join(root, 'gitdirs', name);
 
+test('the setup commit starts no git auto maintenance, so the runner copy of the git dir is stable', async () => {
+	// Auto maintenance runs in the background after a commit. It rewrote .git/objects while the runner copied it.
+	const envs: Array<Record<string, string | undefined>> = [];
+	const recording: typeof realExec = (command, args, options) => {
+		if (command === 'git' && args.includes('commit')) envs.push(options?.env ?? {});
+		return realExec(command, args, options);
+	};
+	const dir = join(root, 'clones', 'no-maintenance');
+	await createWorkspace(recording, { repo, baseSha: base, dir, gitDir: gitDirOf('no-maintenance'), setup: { claudeMd: { text: 'x\n' }, skills: [] } });
+	assert.equal(envs.length, 1);
+	const read = async (key: string) => (await realExec('git', ['config', '--get', key], { cwd: dir, env: envs[0] })).stdout.trim();
+	assert.deepEqual([await read('maintenance.auto'), await read('gc.auto')], ['false', '0']);
+});
+
 test('resolveBase turns a commit-ish into a SHA and refuses an unknown one', async () => {
 	assert.equal(await resolveBase(realExec, repo, 'HEAD'), base);
 	await assert.rejects(() => resolveBase(realExec, repo, 'no-such-ref'), /no-such-ref/);
