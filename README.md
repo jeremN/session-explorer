@@ -111,6 +111,17 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 | `runs` | Runs per configuration, 1 to 20. Default 3. |
 | `configs` | 1 to 8 configurations with unique names. |
 
+### Mine tasks from your sessions
+
+`npm run eval:mine -- [--days 30] [--projects <regex>] [--out <file>]` reads your local Claude Code sessions and writes candidate tasks to `eval-runner/out/candidates.json` (gitignored). A task is a candidate when:
+
+- its last check after the last edit passed;
+- its working directory is a git repository that still exists;
+- a commit was made between the prompt and 10 minutes after the next prompt (the solution);
+- that commit adds or changes at least one test file (the hidden tests).
+
+Each candidate holds a spec draft: the base is the parent of the first commit of the task, the prompt is the prompt of the task, `hiddenTests` are the test files of the solution, and the acceptance command is the last check, with the repository path replaced by `.`. `review: true` means the command still names an absolute path. To accept a candidate, copy its `spec` into a spec file, set the configs, and read the prompt and the command. The file holds your prompts: it stays on your machine. Runs of the eval runner are skipped.
+
 ### Configuration fields
 
 A field that is absent keeps the CLI default.

@@ -59,9 +59,11 @@ export async function placeHiddenTests(exec: Exec, { repo, commit, paths, dir }:
 		const target = join(dir, path);
 		mkdirSync(dirname(target), { recursive: true });
 		refuseSymlinks(dir, path);
-		// rmSync removes a symlink itself, never its target.
+		// rmSync removes a symlink itself, never its target. The `wx` flag (O_CREAT|O_EXCL) fails if a file or a symlink
+		// came back in between, so the write never follows a link. A parent swapped by a surviving process stays the
+		// residual risk of the README: only an OS boundary closes it.
 		rmSync(target, { recursive: true, force: true });
-		writeFileSync(target, shown.stdout);
+		writeFileSync(target, shown.stdout, { flag: 'wx' });
 	}
 }
 
