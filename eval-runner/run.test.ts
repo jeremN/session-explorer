@@ -345,7 +345,8 @@ test('a container config runs the agent through docker: the clone and a private 
 	assert.equal(args.some((value) => value.includes(record)), false);
 	assert.ok(args.includes('--cap-drop') && args.includes('no-new-privileges'));
 	const name = after('--name')[0];
-	assert.ok(calls.some((call) => call.args[0] === 'rm' && call.args.includes(name)));
+	// The container goes right after the agent, before the diff and the check: the first call after `run` is `rm`.
+	assert.deepEqual(calls[calls.indexOf(run) + 1].args, ['rm', '--force', name]);
 	const seen = JSON.parse(readFileSync(record, 'utf8'));
 	assert.deepEqual(seen.homeFiles, ['auth.json']);
 	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));

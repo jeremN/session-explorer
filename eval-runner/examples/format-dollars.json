@@ -3,6 +3,7 @@
 	"task": {
 		"repo": "../..",
 		"base": "HEAD",
+		"category": "fast",
 		"prompt": "Add and export a function formatDollars(value) to session-explorer/price.ts. It takes a number of dollars and returns a string with two decimals, a space and a dollar sign. formatDollars(1.5) returns \"1.50 $\". Add a test to session-explorer/price.test.ts and run `node --test session-explorer/price.test.ts`. Change no other file.",
 		"promptFile": null,
 		"timeoutSec": 900,

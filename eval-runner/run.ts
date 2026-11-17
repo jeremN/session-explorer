@@ -142,6 +142,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		const started = Date.now();
 		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
+		// After a timeout the container still runs: it must be gone before the diff and the acceptance command.
+		if (planned.config.container) await removeContainer(exec, name, options.docker);
 		writeFileSync(join(runDir, agentName === 'claude' ? 'claude.json' : 'events.jsonl'), agent.stdout);
 		const outcome = outcomeOf(planned.config, agent.stdout, prompt, started);
 		record.cliCostUsd = outcome.costUsd === null ? null : Math.round(outcome.costUsd * 10_000) / 10_000;
@@ -199,6 +201,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		failed = true;
 	} finally {
 		if (gitDir) await removeWorkspace(gitDir);
+		// Backstop: an error between the start and the first removal.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
 		if (home) await removeWorkspace(home);
 		if (!options.keep) await removeWorkspace(clone);

@@ -38,7 +38,8 @@ export type Config = {
 export type Spec = {
 	name: string;
 	dir: string;
-	task: { repo: string; base: string; prompt?: string; promptFile?: string; timeoutSec: number; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
+	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
+	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
 	budget: { perRunUsd: number; perEvalUsd: number };
 	runs: number;
 	configs: Config[];
@@ -77,7 +78,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
-	const task = object(spec.task, 'spec.task', ['repo', 'base', 'prompt', 'promptFile', 'timeoutSec', 'acceptance', 'hiddenTests']);
+	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'acceptance', 'hiddenTests']);
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
@@ -181,6 +182,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		task: {
 			repo: resolve(dir, string(task.repo, 'spec.task.repo')),
 			base: optional(task.base, 'spec.task.base', string) ?? 'HEAD',
+			...(task.category === undefined || task.category === null ? {} : { category: string(task.category, 'spec.task.category') }),
 			...(prompt === undefined ? {} : { prompt }),
 			...(promptFile === undefined ? {} : { promptFile: resolve(dir, promptFile) }),
 			timeoutSec: optional(task.timeoutSec, 'spec.task.timeoutSec', (value, field) => number(value, field, 1)) ?? 900,

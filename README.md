@@ -197,12 +197,28 @@ A probe checked the boundary: in the container, `touch /escape-test` fails with 
 
 Limits:
 
-- The network stays open: the agent needs the API of its model. An allowlist (a proxy that lets only the model API through) is not done.
+- The network stays open: the agent needs the API of its model. An allowlist (a proxy that lets only the model API through) is not done. For Codex, this is a step back: on the host, `workspace-write` gives its shell no network; in the container, its shell has the network. Prefer the host mode for Codex when the task needs no isolation from your files.
 - Claude Code does not run in the container: its login is in the macOS keychain. Use `sandbox: true` for Claude Code.
 - opencode on this machine keeps its valid key outside `auth.json`, so opencode in the container got `401 This API key has expired`. Pass a fresh key with `containerEnv`.
 - The acceptance command still runs on the host, in the clone.
 
 Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.
+
+### Routing table
+
+`npm run eval:matrix` reads every `eval.json` of the output folder and prints, per task category, the pass rate, the median cost and the median time of each route (agent and model). It writes `matrix.json` and `matrix.md` next to the evals.
+
+```sh
+npm run eval:matrix -- --exclude <evalId>,<evalId>/<runId>   # leave out an eval, or one run known to be wrong
+```
+
+- **Category.** `task.category` in the spec, free text. Use the classes of `~/.claude/model-matrix.md` (`fast`, `implementation`, `strong`): the report then prints the route that the matrix gives to that class next to the proposal. The category is not part of the cache key.
+- **Task.** The base commit, the prompt and the acceptance command. A spec with `base: HEAD` gives a new task each time the branch moves: pin the base of a suite task to a commit.
+- **Route.** `agent/model`. A config that changes what the agent is told (`claudeMd`, `appendSystemPrompt`, `skills`, `plugins`) is an experiment, not a route: it is left out. A run with status `error` is left out too: it is a failure of the runner or of the CLI start. A run reused from the cache counts once.
+- **Proposal.** Among the routes with 3 runs or more, the cheapest one whose pass rate is within one run of the best. A route with no cost (Codex without `price`) comes last.
+- **Tasks that tell no route apart.** Two routes or more ran the task, and all pass or all fail. Such a task costs runs and moves no proposal. When no task of a category tells the routes apart, the report says that the cost decides alone.
+
+The report never edits `~/.claude/model-matrix.md`.
 
 ### Budget
 
