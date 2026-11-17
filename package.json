@@ -7,7 +7,7 @@
   "type": "module",
   "engines": { "node": ">=23.6" },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test '*/*.test.ts'",
     "build": "node session-explorer/build.ts",
     "waste": "node session-explorer/build.ts --waste",
     "serve": "node session-explorer/build.ts --serve",
