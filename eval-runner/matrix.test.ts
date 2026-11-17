@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildMatrix, propose, readMatrixRoutes, renderMarkdown } from './matrix.ts';
+import { buildMatrix, propose, readMatrixRoutes, renderMarkdown, verdictOf } from './matrix.ts';
 import type { SavedEval } from './matrix.ts';
 import type { RunRecord } from './stats.ts';
 
@@ -74,4 +74,17 @@ test('propose: the cheapest route within one run of the best rate, never before 
 test('readMatrixRoutes reads the Claude model of each class', () => {
 	const text = '| Class | Use | Claude model | Codex |\n|---|---|---|---|\n| strong | Plan | `opus` | default |\n| fast | Edit | `haiku` | none |\n';
 	assert.deepEqual(readMatrixRoutes(text), { strong: 'claude/opus', fast: 'claude/haiku' });
+});
+
+test('verdictOf: an agent that stopped partway or ran out of time failed; a run where the agent never worked is left out', () => {
+	const worked = { cost: 0.1, billedTokens: 1000 } as RunRecord['metrics'];
+	assert.equal(verdictOf(run('a', 'sonnet', false, undefined, { status: 'error' })), 'out');
+	// A check that passes after a partway stop or a timeout is no pass.
+	assert.equal(verdictOf(run('a', 'sonnet', true, undefined, { status: 'error', metrics: worked })), 'fail');
+	assert.equal(verdictOf(run('a', 'sonnet', true, undefined, { status: 'timeout' })), 'fail');
+	assert.equal(verdictOf(run('a', 'sonnet', true, undefined, { status: 'skipped' })), 'out');
+	assert.equal(verdictOf(run('a', 'sonnet', true)), 'pass');
+	const matrix = buildMatrix([evalOf('e1', 'Fix A.', 'strong', CONFIGS, [run('codex-1', 'codex', true, 0.1), run('codex-2', 'codex', true, 0.1, { status: 'timeout' }), run('codex-3', 'codex', true, undefined, { status: 'error', metrics: worked })])]);
+	assert.deepEqual(matrix.categories[0].routes.map((route) => [route.route, route.passed, route.n]), [['codex/gpt-x', 1, 3]]);
+	assert.equal(matrix.excluded.errors, 0);
 });
