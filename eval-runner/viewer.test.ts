@@ -85,3 +85,16 @@ test('the option list marks the selected eval', () => {
 	assert.match(html, /<option value="b" selected>/);
 	assert.doesNotMatch(html, /<option value="a" selected>/);
 });
+
+test('the eval view names a non-Claude agent, shows a cost under a cent, and a run with no cost', async () => {
+	const { renderEval } = await import('../session-explorer/viewer/evals.mjs');
+	const spread = (values: number[]) => ({ n: values.length, median: values[0], min: Math.min(...values), max: Math.max(...values), values });
+	const html = renderEval({
+		id: 'e', name: 'n', generatedAt: '2026-11-17T10:00:00Z', spent: 0, cliVersion: 'x', baseSha: 'abc', spec: { task: { prompt: 'p' } },
+		configs: [{ name: 'cheap', agent: 'opencode', model: null, pass: { passed: 1, n: 1 }, metrics: { cost: spread([0.0025]) } }],
+		runs: [{ id: 'cheap-1', config: 'cheap', status: 'ok', metrics: { errors: 0 } }]
+	});
+	assert.match(html, /cheap <small>opencode<\/small>/);
+	assert.match(html, /0\.0025/);
+	assert.match(html, /—/);
+});

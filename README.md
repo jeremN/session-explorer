@@ -81,7 +81,7 @@ Without a `brain` section, only an unscoped qmd search counts as a knowledge-bas
 
 ## Eval runner
 
-`eval-runner/` runs one task under several Claude Code configurations, N times each. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result.
+`eval-runner/` runs one task under several agent configurations, N times each: Claude Code, Codex or opencode. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result.
 
 ```sh
 node eval-runner/run.ts eval-runner/examples/format-dollars.json --dry-run   # print the plan and the maximum spend
@@ -89,9 +89,9 @@ node eval-runner/run.ts eval-runner/examples/format-dollars.json             # r
 node session-explorer/build.ts --serve                                        # then open the "Évaluations" view
 ```
 
-Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--claude <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
+Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 
-The runner makes no network call. The `claude` CLI is the only network user, and the only thing that spends money.
+The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money.
 
 ### Spec
 
@@ -156,6 +156,27 @@ A field that is absent keeps the CLI default.
 
 The runner always adds `-p` (prompt on stdin), `--output-format json`, `--session-id`, `--max-budget-usd`, `--permission-prompts none`, `--setting-sources project,local` and `--disallowedTools "Bash(git push:*)"`. The `--setting-sources` flag keeps your user hooks and plugins out of every configuration.
 
+### Other agents: Codex and opencode
+
+Set `agent` in a config: `claude` (the default), `codex` or `opencode`. The other agents print JSON events. The runner turns them into a transcript in the Claude Code format, so the same pipeline scores every agent. The run folder keeps the raw events in `events.jsonl`.
+
+| | Codex | opencode |
+|---|---|---|
+| Command | `codex exec --json --sandbox workspace-write --ephemeral --ignore-rules --skip-git-repo-check -`, prompt on stdin | `opencode run --format json --auto --pure --dir <clone> -- <prompt>` |
+| `claudeMd` | written as `AGENTS.md` | written as `AGENTS.md` |
+| User config kept out | A new `CODEX_HOME` (mode 0700) that holds only a copy of `auth.json`. Without it, Codex reads `~/.codex/AGENTS.md` and what it points to. | An empty `XDG_CONFIG_HOME`, `OPENCODE_DISABLE_CLAUDE_CODE=1` (no `~/.claude/CLAUDE.md`, no Claude Code skills) and `--pure` (no plugins) |
+| Sandbox | Always `workspace-write`: the shell writes only in the clone, with no network. `sandbox: false` is refused. | None. The spec must set `sandbox: false` to accept it. |
+| Cost | Codex prints tokens, not dollars. Set `price` in the config (`{ "input", "output", "cacheRead" }`, dollars for one million tokens, `cacheRead` a multiple of `input`). Without it, the run has no cost and a note. | The sum of the `cost` of each step. |
+| Budget | No dollar cap per run: only `task.timeoutSec` bounds a run. | Same. |
+
+The Claude Code fields (`appendSystemPrompt`, `settings`, `skills`, `plugins`, `permissionMode`, `allowedTools`, `disallowedTools`, `mcpConfig`, `bare`) are refused for the other agents.
+
+> **Warning:** opencode has no sandbox. Its shell runs as your user and can write anywhere. The runner checks `git status` of the source repository after each run and stops the eval when it changed. Use opencode only on a task you trust, until the container step.
+
+opencode works in `$PWD`, not in the working directory of its process. A first trial without `--dir` sent it into the source repository, where it edited two files. The runner now passes `--dir <clone>` and sets `PWD` to the clone for every agent.
+
+Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.
+
 ### Budget
 
 - Each run gets `--max-budget-usd <perRunUsd>`.
@@ -195,8 +216,9 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 | Path | Content |
 |---|---|
 | `eval.json` | Spec, base SHA, CLI version, runs with their metrics, and the median, min, max and pass rate per configuration. |
-| `runs/<runId>/claude.json` | The CLI result. |
-| `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. |
+| `runs/<runId>/claude.json` | The CLI result (Claude Code). |
+| `runs/<runId>/events.jsonl` | The raw JSON events (Codex, opencode). |
+| `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. For Codex and opencode, the transcript built from the events. |
 | `runs/<runId>/session.json` | The session file of the viewer. |
 | `runs/<runId>/diff.patch` | The final diff against the setup commit. |
 | `runs/<runId>/acceptance.log` | The last 64 KB of the acceptance output. |

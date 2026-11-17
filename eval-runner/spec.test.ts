@@ -107,3 +107,23 @@ test('loadSpec reads promptFile and names a missing or invalid file', () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test('agent: claude stays unset, codex and opencode refuse the Claude Code options, opencode needs sandbox false', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.equal(validateSpec(withConfig({ agent: 'claude' }), '/s').configs[0].agent, undefined);
+	assert.equal(validateSpec(withConfig({ agent: 'codex', model: 'gpt-x', claudeMd: { text: 'x' } }), '/s').configs[0].agent, 'codex');
+	failure(withConfig({ agent: 'gemini' }), 'spec.configs[0].agent');
+	failure(withConfig({ agent: 'codex', permissionMode: 'auto' }), 'spec.configs[0].permissionMode');
+	failure(withConfig({ agent: 'codex', skills: ['./s'] }), 'spec.configs[0].skills');
+	failure(withConfig({ agent: 'codex', sandbox: false }), 'spec.configs[0].sandbox');
+	failure(withConfig({ agent: 'opencode' }), 'spec.configs[0].sandbox');
+	assert.equal(validateSpec(withConfig({ agent: 'opencode', sandbox: false }), '/s').configs[0].sandbox, false);
+});
+
+test('price: codex only, rates of zero or more, cacheRead a multiple from 0 to 1', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.deepEqual(validateSpec(withConfig({ agent: 'codex', price: { input: 1.25, output: 10, cacheRead: 0.1 } }), '/s').configs[0].price, { input: 1.25, output: 10, cacheRead: 0.1 });
+	failure(withConfig({ price: { input: 1, output: 2 } }), 'spec.configs[0].price');
+	failure(withConfig({ agent: 'codex', price: { input: -1, output: 2 } }), 'spec.configs[0].price.input');
+	failure(withConfig({ agent: 'codex', price: { input: 1, output: 2, cacheRead: 2 } }), 'spec.configs[0].price.cacheRead');
+});

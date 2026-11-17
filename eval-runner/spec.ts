@@ -8,8 +8,16 @@ export class SpecError extends Error {
 
 export const PERMISSION_MODES = ['acceptEdits', 'auto', 'dontAsk', 'plan'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
+export const AGENT_NAMES = ['claude', 'codex', 'opencode'] as const;
+export type AgentName = (typeof AGENT_NAMES)[number];
+// These fields drive the Claude Code CLI. The other agents have no such option.
+const CLAUDE_ONLY = ['appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare'] as const;
 export type Config = {
 	name: string;
+	// Unset means claude. The runner leaves it unset, so the cache keys of the Claude configs stay the same.
+	agent?: AgentName;
+	// Dollars for one million tokens, for an agent that prints tokens but no cost (codex). cacheRead is a multiple of input.
+	price?: { input: number; output: number; cacheRead?: number };
 	model?: string;
 	claudeMd?: { text: string } | { file: string };
 	appendSystemPrompt?: string;
@@ -90,7 +98,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox']);
+		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -129,6 +137,23 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		if (config.sandbox !== undefined && config.sandbox !== null) {
 			if (typeof config.sandbox !== 'boolean') fail(`${at}.sandbox`, 'required boolean');
 			result.sandbox = config.sandbox as boolean;
+		}
+		if (config.agent !== undefined && config.agent !== null) {
+			if (!(AGENT_NAMES as readonly unknown[]).includes(config.agent)) fail(`${at}.agent`, `must be one of ${AGENT_NAMES.join(', ')}`);
+			if (config.agent !== 'claude') result.agent = config.agent as AgentName;
+		}
+		if (config.price !== undefined && config.price !== null) {
+			const price = object(config.price, `${at}.price`, ['input', 'output', 'cacheRead']);
+			result.price = { input: number(price.input, `${at}.price.input`, 0), output: number(price.output, `${at}.price.output`, 0) };
+			const cacheRead = optional(price.cacheRead, `${at}.price.cacheRead`, (value, field) => number(value, field, 0, 1));
+			if (cacheRead !== undefined) result.price.cacheRead = cacheRead;
+		}
+		if (result.price && result.agent !== 'codex') fail(`${at}.price`, 'only codex needs a price: the other agents give their cost');
+		if (result.agent) {
+			for (const key of CLAUDE_ONLY) if (result[key] !== undefined) fail(`${at}.${key}`, `a Claude Code option: agent ${result.agent} has none`);
+			// Codex always runs its shell in its workspace-write sandbox. opencode has no sandbox: the spec must say it knows.
+			if (result.agent === 'codex' && result.sandbox === false) fail(`${at}.sandbox`, 'codex always runs in its workspace-write sandbox');
+			if (result.agent === 'opencode' && result.sandbox !== false) fail(`${at}.sandbox`, 'opencode has no sandbox: its shell runs on this machine, outside the clone. Set sandbox: false to accept that');
 		}
 		return result;
 	});

@@ -1,7 +1,8 @@
 // Aggregates over the runs of one configuration. Pure functions, no file access.
 export type Status = 'ok' | 'timeout' | 'budget' | 'error' | 'skipped';
 export type RunMetrics = {
-	cost: number;
+	// Absent when the agent gives no cost and the config no price.
+	cost?: number;
 	billedTokens: number;
 	cacheReadShare: number;
 	errors: number;

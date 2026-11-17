@@ -63,5 +63,6 @@ function withSandbox(settings: Config['settings'], readText: (path: string) => s
 
 // What the runner writes into the clone before the setup commit.
 export function setupFiles(config: Config) {
-	return { claudeMd: config.claudeMd, skills: config.skills ?? [] };
+	// codex and opencode read AGENTS.md. Claude Code reads CLAUDE.md, the default of the workspace.
+	return { claudeMd: config.claudeMd, skills: config.skills ?? [], ...(config.agent ? { instructionFile: 'AGENTS.md' } : {}) };
 }

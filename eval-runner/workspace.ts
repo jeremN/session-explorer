@@ -6,7 +6,8 @@ import { basename, dirname, join } from 'node:path';
 import type { Exec } from './exec.ts';
 import type { Config } from './spec.ts';
 
-type Setup = { claudeMd: Config['claudeMd']; skills: string[] };
+// `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
+type Setup = { claudeMd: Config['claudeMd']; skills: string[]; instructionFile?: string };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
@@ -82,8 +83,9 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	rmSync(join(dir, '.git', 'FETCH_HEAD'), { force: true });
 	if (setup.claudeMd) {
 		// Remove first: writeFileSync would follow a symlink and write outside the clone.
-		rmSync(join(dir, 'CLAUDE.md'), { force: true });
-		writeFileSync(join(dir, 'CLAUDE.md'), 'text' in setup.claudeMd ? setup.claudeMd.text : readFileSync(setup.claudeMd.file, 'utf8'));
+		const file = setup.instructionFile ?? 'CLAUDE.md';
+		rmSync(join(dir, file), { force: true });
+		writeFileSync(join(dir, file), 'text' in setup.claudeMd ? setup.claudeMd.text : readFileSync(setup.claudeMd.file, 'utf8'));
 	}
 	for (const skill of setup.skills) {
 		const target = `.claude/skills/${basename(skill)}`;

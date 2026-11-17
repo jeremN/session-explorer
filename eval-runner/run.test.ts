@@ -254,3 +254,64 @@ test('G1: the runner git dir is outside every path the agent gets, and it is gon
 	assert.equal(existsSync(gitDir), false);
 	assert.equal(existsSync(join(evalDir(out), 'runs', 'baseline-1', 'gitdir')), false);
 });
+
+test('a codex config and an opencode config: AGENTS.md, private config homes, events turned into a scored transcript', async () => {
+	const out = join(root, 'out-agents');
+	const record = join(root, 'agent-record.json');
+	const codexAuth = join(root, 'codex-auth');
+	mkdirSync(codexAuth);
+	writeFileSync(join(codexAuth, 'auth.json'), '{}');
+	writeFileSync(join(codexAuth, 'AGENTS.md'), 'user rules');
+	const spec = writeSpec('agents', {
+		runs: 1,
+		configs: [
+			{ name: 'codex', agent: 'codex', model: 'gpt-x', claudeMd: { text: 'Be terse.\n' }, price: { input: 1, output: 10, cacheRead: 0.1 } },
+			{ name: 'opencode', agent: 'opencode', sandbox: false }
+		]
+	});
+	const fixtures = join(import.meta.dirname, 'fixtures');
+	const codex = await cli([spec, '--only', 'codex', '--out', out, '--codex', join(fixtures, 'fake-codex.mjs')], { FAKE_AGENT_RECORD: record, CODEX_HOME: codexAuth });
+	assert.equal(codex.code, 0, codex.stderr);
+	const seen = JSON.parse(readFileSync(record, 'utf8'));
+	assert.equal(seen.prompt, 'Make the change.');
+	assert.equal(seen.agentsMd, 'Be terse.\n');
+	// The agent gets a new CODEX_HOME with the login only, and it is gone after the run.
+	assert.deepEqual(seen.homeFiles, ['auth.json']);
+	assert.notEqual(seen.home, codexAuth);
+	assert.equal(existsSync(seen.home), false);
+	const first = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
+	const run = first.runs[0];
+	assert.equal(run.status, 'ok');
+	assert.equal(run.acceptance.passed, true);
+	assert.equal(run.cliCostUsd, 0.38);
+	assert.deepEqual([run.metrics.cost, run.metrics.verified, run.metrics.errors], [0.38, 1, 0]);
+	assert.equal(first.cliVersion, 'codex codex-cli 0.0.0');
+	assert.equal(first.configs[0].agent, 'codex');
+	for (const file of ['events.jsonl', 'transcript.jsonl', 'session.json', 'diff.patch']) assert.ok(existsSync(join(evalDir(out), 'runs', 'codex-1', file)), file);
+
+	rmSync(out, { recursive: true, force: true });
+	const opencode = await cli([spec, '--only', 'opencode', '--out', out, '--opencode', join(fixtures, 'fake-opencode.mjs')], { FAKE_AGENT_RECORD: record });
+	assert.equal(opencode.code, 0, opencode.stderr);
+	const used = JSON.parse(readFileSync(record, 'utf8'));
+	assert.equal(used.agentsMd, null);
+	// macOS: /var is a symlink to /private/var, and process.cwd() gives the real path. The clone is gone by now.
+	const plain = (path: string) => path.replace(/^\/private(?=\/)/, '');
+	assert.equal(plain(used.pwd), plain(used.cwd));
+	assert.equal(plain(used.args[used.args.indexOf('--dir') + 1]), plain(used.cwd));
+	assert.equal(used.noClaude, '1');
+	assert.equal(existsSync(used.xdg), false);
+	const second = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8')).runs[0];
+	assert.equal(second.status, 'ok');
+	assert.deepEqual([second.metrics.cost, second.metrics.errors, second.metrics.verified], [0.0025, 1, 1]);
+});
+
+test('an agent that writes in the source repository stops the eval, and its run is an error', async () => {
+	const out = join(root, 'out-escape');
+	const spec = writeSpec('escape', { runs: 2, configs: [{ name: 'opencode', agent: 'opencode', sandbox: false }] });
+	const result = await cli([spec, '--out', out, '--opencode', join(import.meta.dirname, 'fixtures', 'fake-opencode.mjs')], { FAKE_AGENT_ESCAPE: join(repo, 'escaped.txt') });
+	rmSync(join(repo, 'escaped.txt'), { force: true });
+	assert.equal(result.code, 1);
+	assert.match(result.stderr, /changed the working tree/);
+	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
+	assert.deepEqual(saved.runs.map((run: { id: string; status: string }) => [run.id, run.status]), [['opencode-1', 'error']]);
+});

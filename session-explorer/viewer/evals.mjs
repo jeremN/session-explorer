@@ -6,8 +6,10 @@ import { pill, stat } from './ui.mjs';
 // [key, label, format, better]. better: 'low', 'high' or null (no best mark).
 const kfmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(n >= 1e5 ? 0 : 1) + 'k' : String(Math.round(n)));
 const dec = (n) => String(Math.round(n * 100) / 100);
+// A cheap model costs less than a cent per run: show four decimals there.
+const money = (n) => (n > 0 && n < 0.01 ? n.toFixed(4) : n.toFixed(2));
 const ROWS = [
-	['cost', 'Coût ($)', (n) => n.toFixed(2), 'low'],
+	['cost', 'Coût ($)', money, 'low'],
 	['billedTokens', 'Tokens facturés', kfmt, 'low'],
 	['wallSec', 'Durée (s)', (n) => String(Math.round(n)), 'low'],
 	['errors', 'Erreurs', dec, 'low'],
@@ -71,7 +73,7 @@ function bestConfigs(configs, key, better) {
 
 /** The "Comparaison" panel: one row per metric, one column per configuration. */
 export function renderComparison(ev) {
-	const head = '<tr><th scope="col">Métrique</th>' + ev.configs.map((config) => '<th scope="col">' + esc(config.name) + '</th>').join('') + '</tr>';
+	const head = '<tr><th scope="col">Métrique</th>' + ev.configs.map((config) => '<th scope="col">' + esc(config.name) + (config.agent && config.agent !== 'claude' ? ' <small>' + esc(config.agent) + '</small>' : '') + '</th>').join('') + '</tr>';
 	const pass = '<tr><th scope="row">Réussite</th>' + ev.configs.map((config) => '<td>' + passPill(config.pass) + '</td>').join('') + '</tr>';
 	const rows = ROWS.flatMap(([key, label, , better]) => {
 		const all = ev.configs.flatMap((config) => config.metrics[key]?.values ?? []);
@@ -91,7 +93,8 @@ export function renderRuns(ev) {
 	const rows = ev.runs.map((run) => {
 		const [label, tone] = STATUS[run.status] ?? [run.status, 'neutral'];
 		const check = run.acceptance ? (run.acceptance.passed ? pill('passe', 'positive') : pill('échec', 'negative')) : '—';
-		const cost = run.metrics ? run.metrics.cost.toFixed(2) + ' $' : '—';
+		// A codex run with no price in its config has no cost.
+		const cost = typeof run.metrics?.cost === 'number' ? money(run.metrics.cost) + ' $' : '—';
 		const wall = run.wallSec === undefined ? '—' : Math.round(run.wallSec) + ' s';
 		const diff = run.diff ? '+' + run.diff.added + '−' + run.diff.deleted : '—';
 		const link = run.sessionId && run.status !== 'skipped' ? '<a href="#' + esc(run.sessionId) + '">→ session</a>' : '';
