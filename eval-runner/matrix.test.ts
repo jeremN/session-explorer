@@ -67,6 +67,8 @@ test('propose: the cheapest route within one run of the best rate, never before 
 	);
 	assert.equal(pick.route, 'cheap');
 	assert.match(propose([{ route: 'a', passed: 3, n: 3, cost: 0.1, tasks: 1 }], 0).reason, /cost decides alone/);
+	// 2/3 is one run from 3/3, so the cheaper route wins.
+	assert.equal(propose([{ route: 'best', passed: 3, n: 3, cost: 0.04, tasks: 1 }, { route: 'cheap', passed: 2, n: 3, cost: 0.03, tasks: 1 }], 1).route, 'cheap');
 });
 
 test('readMatrixRoutes reads the Claude model of each class', () => {

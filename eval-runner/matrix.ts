@@ -113,7 +113,8 @@ export function propose(routes: RouteStats[], discriminating: number): Proposal 
 	if (ready.length === 0) return { route: null, reason: `no route has ${MIN_RUNS} runs yet` };
 	const best = Math.max(...ready.map((route) => route.passed / route.n));
 	// Within one run of the best rate: a smaller gap is inside the noise of so few runs.
-	const close = ready.filter((route) => route.passed / route.n >= best - 1 / route.n);
+	// Compare in runs, not in rates: 2/3 is one run from 3/3, but 2 / 3 < 1 - 1 / 3 in floating point.
+	const close = ready.filter((route) => route.passed + 1 >= best * route.n - 1e-9);
 	const pick = [...close].sort((a, b) => (a.cost ?? Infinity) - (b.cost ?? Infinity))[0];
 	const caveat = discriminating === 0 ? '; no task of this category tells the routes apart, so the cost decides alone' : '';
 	return { route: pick.route, reason: `cheapest route within one run of the best pass rate (${Math.round(best * 100)} %)${caveat}` };

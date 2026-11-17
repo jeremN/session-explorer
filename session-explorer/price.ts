@@ -11,6 +11,8 @@ const DEFAULT_CACHE_READ = 0.1;
 // Keep in sync with the public Anthropic price list. A model that is absent gets no cost.
 export const RATES: Record<string, Rate> = {
 	'claude-haiku-4-5': { input: 1, output: 5 },
+	// Rate for prompts up to 100k tokens. Above that, input and output cost five times more.
+	'claude-haiku-5-5': { input: 0.1, output: 0.5 },
 	'claude-opus-4-7': { input: 5, output: 25 },
 	'claude-opus-5': { input: 5, output: 25 },
 	'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.05 },
