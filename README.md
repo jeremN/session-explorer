@@ -218,7 +218,7 @@ npm run eval:matrix -- --exclude <evalId>,<evalId>/<runId>   # leave out an eval
 
 - **Category.** `task.category` in the spec, free text. Use the classes of `~/.claude/model-matrix.md` (`fast`, `implementation`, `strong`): the report then prints the route that the matrix gives to that class next to the proposal. The category is not part of the cache key.
 - **Task.** The base commit, the prompt and the acceptance command. A spec with `base: HEAD` gives a new task each time the branch moves: pin the base of a suite task to a commit.
-- **Route.** `agent/model`. A config that changes what the agent is told (`claudeMd`, `appendSystemPrompt`, `skills`, `plugins`) is an experiment, not a route: it is left out. A run with status `error` is left out too: it is a failure of the runner or of the CLI start. A run reused from the cache counts once.
+- **Route.** `agent/model`. A config that changes what the agent is told (`claudeMd`, `appendSystemPrompt`, `skills`, `plugins`) is an experiment, not a route: it is left out. A run with status `error` and no billed token is left out too: the runner or the CLI start failed, and the agent never worked. An `error` after the agent worked (it stopped partway) and a `timeout` count as failures, even when the check passes. A run reused from the cache counts once.
 - **Proposal.** Among the routes with 3 runs or more, the cheapest one whose pass rate is within one run of the best. A route with no cost (Codex without `price`) comes last.
 - **Tasks that tell no route apart.** Two routes or more ran the task, and all pass or all fail. Such a task costs runs and moves no proposal. When no task of a category tells the routes apart, the report says that the cost decides alone.
 

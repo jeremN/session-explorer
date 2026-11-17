@@ -25,6 +25,16 @@ const EXPERIMENT_FIELDS = ['claudeMd', 'appendSystemPrompt', 'skills', 'plugins'
 export const routeOf = (config: Config) => `${config.agent ?? 'claude'}/${config.model ?? 'default'}`;
 const taskKey = (ev: SavedEval) => createHash('sha256').update(`${ev.baseSha}\0${ev.spec.task.prompt ?? ''}\0${ev.spec.task.acceptance.command}`).digest('hex').slice(0, 12);
 
+// What a run says about its route. An error with no billed token is a failure of the runner or of the CLI start: the
+// agent never worked, so the run is left out. An error after the agent worked (it stopped partway) is a failure of the
+// agent. A timeout is a failure even when the check passes on what the agent left.
+export function verdictOf(run: RunRecord): 'out' | 'pass' | 'fail' {
+	if (run.status === 'skipped') return 'out';
+	if (run.status === 'error') return (run.metrics?.billedTokens ?? 0) > 0 ? 'fail' : 'out';
+	if (run.status === 'timeout') return 'fail';
+	return run.acceptance?.passed ? 'pass' : 'fail';
+}
+
 // `excluded` holds run ids as evalId/runId: runs known to be wrong, for example from a bug of the runner.
 export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, string> = {}, excluded: ReadonlySet<string> = new Set()) {
 	const seen = new Set<string>(excluded);
@@ -50,15 +60,15 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 				experiments++;
 				continue;
 			}
-			// An error is a failure of the runner or of the CLI start, not an answer of the agent.
-			if (run.status === 'error') {
+			const verdict = verdictOf(run);
+			if (verdict === 'out') {
 				errors++;
 				continue;
 			}
 			const route = routeOf(config);
 			const cell = (task.routes[route] ??= { passed: 0, n: 0 });
 			cell.n++;
-			if (run.acceptance?.passed) cell.passed++;
+			if (verdict === 'pass') cell.passed++;
 		}
 	}
 	// Second pass, once every task has its final category.
@@ -69,12 +79,13 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 		for (const run of ev.runs) {
 			const id = run.cached ? `${run.cached.evalId}/${run.cached.id}` : `${ev.id}/${run.id}`;
 			const config = ev.spec.configs.find((entry) => entry.name === run.config);
-			if (seen.has(id) || run.status === 'skipped' || run.status === 'error' || !config || EXPERIMENT_FIELDS.some((field) => config[field] !== undefined)) continue;
+			const verdict = verdictOf(run);
+			if (seen.has(id) || verdict === 'out' || !config || EXPERIMENT_FIELDS.some((field) => config[field] !== undefined)) continue;
 			seen.add(id);
 			const slot = `${task.category}\0${routeOf(config)}`;
 			const sample = samples.get(slot) ?? { passed: 0, n: 0, costs: [], walls: [], tasks: new Set() };
 			sample.n++;
-			if (run.acceptance?.passed) sample.passed++;
+			if (verdict === 'pass') sample.passed++;
 			if (typeof run.metrics?.cost === 'number') sample.costs.push(run.metrics.cost);
 			if (typeof run.wallSec === 'number') sample.walls.push(run.wallSec);
 			sample.tasks.add(task.key);
@@ -144,7 +155,7 @@ export function renderMarkdown(matrix: ReturnType<typeof buildMatrix>) {
 	}
 	const flat = matrix.tasks.filter((task) => !task.discriminating && Object.keys(task.routes).length >= 2);
 	if (flat.length) lines.push('## Tasks that tell no route apart', '', ...flat.map((task) => `- ${task.name} (${task.category}): ${Object.entries(task.routes).map(([route, cell]) => `${route} ${cell.passed}/${cell.n}`).join(', ')}`), '');
-	lines.push(`Left out: ${matrix.excluded.errors} run(s) with status error, ${matrix.excluded.experiments} run(s) of configs that change the instructions.`);
+	lines.push(`Left out: ${matrix.excluded.errors} run(s) where the agent never worked (status error, no billed token), ${matrix.excluded.experiments} run(s) of configs that change the instructions.`);
 	return `${lines.join('\n')}\n`;
 }
 
