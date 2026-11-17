@@ -18,6 +18,10 @@ export type Config = {
 	agent?: AgentName;
 	// Dollars for one million tokens, for an agent that prints tokens but no cost (codex). cacheRead is a multiple of input.
 	price?: { input: number; output: number; cacheRead?: number };
+	// Run the agent in a Docker container (codex and opencode). See container.ts.
+	container?: boolean;
+	// Names of host environment variables passed into the container, for a login the auth file does not hold.
+	containerEnv?: string[];
 	model?: string;
 	claudeMd?: { text: string } | { file: string };
 	appendSystemPrompt?: string;
@@ -98,7 +102,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price']);
+		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -148,12 +152,25 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			const cacheRead = optional(price.cacheRead, `${at}.price.cacheRead`, (value, field) => number(value, field, 0, 1));
 			if (cacheRead !== undefined) result.price.cacheRead = cacheRead;
 		}
+		if (config.container !== undefined && config.container !== null) {
+			if (typeof config.container !== 'boolean') fail(`${at}.container`, 'required boolean');
+			if (config.container) result.container = true;
+		}
+		const containerEnv = optional(config.containerEnv, `${at}.containerEnv`, strings);
+		if (containerEnv) {
+			if (!result.container) fail(`${at}.containerEnv`, 'only for a config with container: true');
+			for (const name of containerEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`${at}.containerEnv`, `${name} is not a variable name`);
+			result.containerEnv = containerEnv;
+		}
+		if (result.container && !result.agent) fail(`${at}.container`, 'only codex and opencode run in a container. Claude Code has its own sandbox (sandbox: true)');
 		if (result.price && result.agent !== 'codex') fail(`${at}.price`, 'only codex needs a price: the other agents give their cost');
 		if (result.agent) {
 			for (const key of CLAUDE_ONLY) if (result[key] !== undefined) fail(`${at}.${key}`, `a Claude Code option: agent ${result.agent} has none`);
 			// Codex always runs its shell in its workspace-write sandbox. opencode has no sandbox: the spec must say it knows.
 			if (result.agent === 'codex' && result.sandbox === false) fail(`${at}.sandbox`, 'codex always runs in its workspace-write sandbox');
-			if (result.agent === 'opencode' && result.sandbox !== false) fail(`${at}.sandbox`, 'opencode has no sandbox: its shell runs on this machine, outside the clone. Set sandbox: false to accept that');
+			if (result.agent === 'opencode' && !result.container && result.sandbox !== false) fail(`${at}.sandbox`, 'opencode has no sandbox: its shell runs on this machine, outside the clone. Set container: true, or sandbox: false to accept that');
+			// Without a model, opencode takes the last model of the user (~/.local/state/opencode/model.json).
+			if (result.agent === 'opencode' && !result.model) fail(`${at}.model`, 'opencode needs a model, as provider/model');
 		}
 		return result;
 	});

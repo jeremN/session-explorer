@@ -116,8 +116,11 @@ test('agent: claude stays unset, codex and opencode refuse the Claude Code optio
 	failure(withConfig({ agent: 'codex', permissionMode: 'auto' }), 'spec.configs[0].permissionMode');
 	failure(withConfig({ agent: 'codex', skills: ['./s'] }), 'spec.configs[0].skills');
 	failure(withConfig({ agent: 'codex', sandbox: false }), 'spec.configs[0].sandbox');
-	failure(withConfig({ agent: 'opencode' }), 'spec.configs[0].sandbox');
-	assert.equal(validateSpec(withConfig({ agent: 'opencode', sandbox: false }), '/s').configs[0].sandbox, false);
+	failure(withConfig({ agent: 'opencode', model: 'go/flash' }), 'spec.configs[0].sandbox');
+	failure(withConfig({ agent: 'opencode', sandbox: false }), 'spec.configs[0].model');
+	assert.equal(validateSpec(withConfig({ agent: 'opencode', model: 'go/flash', sandbox: false }), '/s').configs[0].sandbox, false);
+	// A container replaces the sandbox: false acknowledgement.
+	assert.equal(validateSpec(withConfig({ agent: 'opencode', model: 'go/flash', container: true }), '/s').configs[0].container, true);
 });
 
 test('price: codex only, rates of zero or more, cacheRead a multiple from 0 to 1', () => {
@@ -126,4 +129,13 @@ test('price: codex only, rates of zero or more, cacheRead a multiple from 0 to 1
 	failure(withConfig({ price: { input: 1, output: 2 } }), 'spec.configs[0].price');
 	failure(withConfig({ agent: 'codex', price: { input: -1, output: 2 } }), 'spec.configs[0].price.input');
 	failure(withConfig({ agent: 'codex', price: { input: 1, output: 2, cacheRead: 2 } }), 'spec.configs[0].price.cacheRead');
+});
+
+test('container: codex and opencode only, containerEnv names only with a container', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.deepEqual(validateSpec(withConfig({ agent: 'codex', container: true, containerEnv: ['OPENAI_API_KEY'] }), '/s').configs[0].containerEnv, ['OPENAI_API_KEY']);
+	failure(withConfig({ container: true }), 'spec.configs[0].container');
+	failure(withConfig({ agent: 'codex', containerEnv: ['X'] }), 'spec.configs[0].containerEnv');
+	failure(withConfig({ agent: 'codex', container: true, containerEnv: ['A=b'] }), 'spec.configs[0].containerEnv');
+	failure(withConfig({ agent: 'codex', container: 'yes' }), 'spec.configs[0].container');
 });

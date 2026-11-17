@@ -30,7 +30,19 @@
 		{
 			"name": "opencode",
 			"agent": "opencode",
+			"model": "opencode-go/deepseek-v4.1-flash",
 			"sandbox": false
+		},
+		{
+			"name": "codex-container",
+			"agent": "codex",
+			"model": "gpt-6-astra",
+			"price": {
+				"input": 10,
+				"output": 50,
+				"cacheRead": 0.1
+			},
+			"container": true
 		}
 	]
 }

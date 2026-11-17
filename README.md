@@ -89,7 +89,7 @@ node eval-runner/run.ts eval-runner/examples/format-dollars.json             # r
 node session-explorer/build.ts --serve                                        # then open the "Évaluations" view
 ```
 
-Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
+Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 
 The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money.
 
@@ -162,18 +162,45 @@ Set `agent` in a config: `claude` (the default), `codex` or `opencode`. The othe
 
 | | Codex | opencode |
 |---|---|---|
-| Command | `codex exec --json --sandbox workspace-write --ephemeral --ignore-rules --skip-git-repo-check -`, prompt on stdin | `opencode run --format json --auto --pure --dir <clone> -- <prompt>` |
+| Command | `codex exec --json --sandbox workspace-write --ephemeral --ignore-rules --skip-git-repo-check -`, prompt on stdin | `opencode run --format json --auto --pure --dir <clone> --model <model> -- <prompt>`. `model` is required: without it, opencode takes your last model from `~/.local/state/opencode/model.json`. |
 | `claudeMd` | written as `AGENTS.md` | written as `AGENTS.md` |
 | User config kept out | A new `CODEX_HOME` (mode 0700) that holds only a copy of `auth.json`. Without it, Codex reads `~/.codex/AGENTS.md` and what it points to. | An empty `XDG_CONFIG_HOME`, `OPENCODE_DISABLE_CLAUDE_CODE=1` (no `~/.claude/CLAUDE.md`, no Claude Code skills) and `--pure` (no plugins) |
-| Sandbox | Always `workspace-write`: the shell writes only in the clone, with no network. `sandbox: false` is refused. | None. The spec must set `sandbox: false` to accept it. |
+| Sandbox | Always `workspace-write`: the shell writes only in the clone, with no network. `sandbox: false` is refused. | None. Set `container: true`, or `sandbox: false` to accept it. |
 | Cost | Codex prints tokens, not dollars. Set `price` in the config (`{ "input", "output", "cacheRead" }`, dollars for one million tokens, `cacheRead` a multiple of `input`). Without it, the run has no cost and a note. | The sum of the `cost` of each step. |
 | Budget | No dollar cap per run: only `task.timeoutSec` bounds a run. | Same. |
 
 The Claude Code fields (`appendSystemPrompt`, `settings`, `skills`, `plugins`, `permissionMode`, `allowedTools`, `disallowedTools`, `mcpConfig`, `bare`) are refused for the other agents.
 
-> **Warning:** opencode has no sandbox. Its shell runs as your user and can write anywhere. The runner checks `git status` of the source repository after each run and stops the eval when it changed. Use opencode only on a task you trust, until the container step.
+> **Warning:** opencode outside a container has no sandbox. Its shell runs as your user and can write anywhere. The runner checks `git status` of the source repository after each run and stops the eval when it changed. Use `container: true`, or use opencode only on a task you trust.
 
 opencode works in `$PWD`, not in the working directory of its process. A first trial without `--dir` sent it into the source repository, where it edited two files. The runner now passes `--dir <clone>` and sets `PWD` to the clone for every agent.
+
+### Container
+
+With `container: true`, a Codex or opencode config runs its agent in Docker. Build the image first:
+
+```sh
+npm run eval:image   # docker build -t eval-runner-agents:<hash of the Dockerfile> eval-runner/container
+```
+
+The image (`eval-runner/container/Dockerfile`) pins Node and the CLI versions. Its tag is the hash of the Dockerfile, and it is the CLI version in the cache key. The runner refuses to start when the image is missing.
+
+Each run gets:
+
+- `docker run --rm --init --user <your uid>:<your gid> --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2`.
+- Two mounts and nothing else from the host: the clone at `/work`, and a new private home at `/home/agent` that holds only a copy of the `auth.json` of the agent.
+- The variables of the agent, passed by name (`-e NAME`): no value shows in the argv or the process list. `containerEnv` adds host variables by name, for a login that the auth file does not hold.
+- Codex runs with `--sandbox danger-full-access`: the container is the boundary. Its own sandbox (bwrap) cannot create a namespace in an unprivileged container, and every command failed with it.
+- After the run, `docker rm --force <name>`: a killed `docker run` client leaves its container running.
+
+A probe checked the boundary: in the container, `touch /escape-test` fails with "permission denied" and `/Users` does not exist.
+
+Limits:
+
+- The network stays open: the agent needs the API of its model. An allowlist (a proxy that lets only the model API through) is not done.
+- Claude Code does not run in the container: its login is in the macOS keychain. Use `sandbox: true` for Claude Code.
+- opencode on this machine keeps its valid key outside `auth.json`, so opencode in the container got `401 This API key has expired`. Pass a fresh key with `containerEnv`.
+- The acceptance command still runs on the host, in the clone.
 
 Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.
 
@@ -207,7 +234,7 @@ Residual risk: an agent with shell access can unset the environment variables an
 
 The clone keeps only the base commit and its ancestors. The runner makes an empty repository and fetches the base commit only, so a later commit (the solution of a task mined from a past session) is not in the clone: no ref, no object. The fetch writes a new pack, so no object file is shared with the source repository.
 
-Deferred: OS-level containment (a container, a VM or a dedicated user started by the runner).
+Codex and opencode configs can run in a container (`container: true`, see above). Claude Code runs on the host.
 
 ### Output
 

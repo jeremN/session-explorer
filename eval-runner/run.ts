@@ -1,5 +1,5 @@
 // Eval runner: runs one task under several Claude Code configurations, N times each, and scores every run.
-// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--out <dir>]
+// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 // Exit codes: 0 done (or --help, or a dry run), 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 import { randomUUID } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -10,6 +10,7 @@ import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
 import { setupFiles } from './command.ts';
+import { HOME, WORK, containerHome, containerName, containerize, imageExists, imageTag, removeContainer } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
@@ -19,7 +20,7 @@ import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
 import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
-const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--out <dir>]
+const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 
   <spec.json>   the eval spec: one task, the configurations, the run count
   --dry-run     validate the spec and print the planned runs. Starts no agent and writes nothing.
@@ -30,14 +31,15 @@ const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N]
   --claude P    the claude executable (default: claude)
   --codex P     the codex executable (default: codex)
   --opencode P  the opencode executable (default: opencode)
+  --docker P    the docker executable, for a config with container: true (default: docker)
   --out DIR     where the results go (default: eval-runner/out)
   --spec-dir D  the value of EVAL_SPEC_DIR (default: the folder of the spec file). eval diff sets it.
 `;
 
-type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; bin: Record<AgentName, string>; out: string; specDir?: string };
+type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; bin: Record<AgentName, string>; docker: string; out: string; specDir?: string };
 
 function parseArgs(argv: string[]): Options | 'help' {
-	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, bin: { claude: 'claude', codex: 'codex', opencode: 'opencode' }, out: join(import.meta.dirname, 'out') };
+	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, bin: { claude: 'claude', codex: 'codex', opencode: 'opencode' }, docker: 'docker', out: join(import.meta.dirname, 'out') };
 	for (let index = 0; index < argv.length; index++) {
 		const flag = argv[index];
 		const value = () => {
@@ -56,6 +58,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 		else if (flag === '--claude') options.bin.claude = value();
 		else if (flag === '--codex') options.bin.codex = value();
 		else if (flag === '--opencode') options.bin.opencode = value();
+		else if (flag === '--docker') options.docker = value();
 		else if (flag === '--out') options.out = resolve(value());
 		else if (flag === '--spec-dir') options.specDir = resolve(value());
 		else if (flag.startsWith('-')) throw new SpecError(`${flag}: unknown option`);
@@ -87,11 +90,21 @@ function findTranscript(sessionId: string) {
 	return undefined;
 }
 
-// How to start the agent of a config. `home` is the private config folder of codex or opencode.
-// PWD names the clone too: a CLI that reads PWD instead of its cwd (opencode does) must never see the folder of the runner.
-function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string }, prompt: string, home: string, clone: string): Invocation {
-	const invocation = config.agent === 'codex' ? codexInvocation(config, home, prompt) : config.agent === 'opencode' ? opencodeInvocation(config, home, prompt, clone) : claudeInvocation(config, context, prompt);
-	return { ...invocation, env: { ...invocation.env, PWD: clone } };
+type Started = Invocation & { command: string };
+type Where = { home: string; clone: string; image: string; name: string };
+
+// How to start the agent of a config. `home` is the private config folder of codex or opencode (on the host, or the
+// home mounted in the container). PWD names the clone too: a CLI that reads PWD instead of its cwd (opencode does)
+// must never see the folder of the runner.
+function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string }, prompt: string, where: Where, options: Options): Started {
+	if (config.container) {
+		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
+		const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user, passEnv: config.containerEnv }, options.docker);
+	}
+	const agent = config.agent ?? 'claude';
+	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone) : claudeInvocation(config, context, prompt);
+	return { ...invocation, command: options.bin[agent], env: { ...invocation.env, PWD: where.clone } };
 }
 
 function outcomeOf(config: Config, stdout: string, prompt: string, start: number): Outcome {
@@ -100,11 +113,12 @@ function outcomeOf(config: Config, stdout: string, prompt: string, start: number
 	return claudeOutcome(stdout);
 }
 
-type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string };
+type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string };
 type RunOutcome = { record: RunRecord; failed: boolean };
 
-async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunContext, planned: Planned): Promise<RunOutcome> {
+async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: RunContext, planned: Planned): Promise<RunOutcome> {
 	const sessionId = randomUUID();
+	const name = containerName(evalId, planned.id);
 	const runDir = join(evalDir, 'runs', planned.id);
 	const clone = join(tmpdir(), 'eval-runner', evalId, planned.id);
 	// The runner copy of the git dir. Its path is random and the agent never gets it: not in the argv, the env, the cwd
@@ -120,12 +134,13 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		const { setupSha, fileMode } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
 		const agentName = planned.config.agent ?? 'claude';
 		const prompt = spec.task.prompt ?? '';
-		home = agentName === 'codex' ? codexHome() : agentName === 'opencode' ? opencodeConfigHome() : undefined;
-		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir }, prompt, home ?? '', clone);
+		if (planned.config.container) home = containerHome(planned.config.agent!);
+		else home = agentName === 'codex' ? codexHome() : agentName === 'opencode' ? opencodeConfigHome() : undefined;
+		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir }, prompt, { home: home ?? '', clone, image, name }, options);
 		for (const file of invocation.files) writeFileSync(file.path, file.content);
 
 		const started = Date.now();
-		const agent = await exec(options.bin[agentName], invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
+		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
 		writeFileSync(join(runDir, agentName === 'claude' ? 'claude.json' : 'events.jsonl'), agent.stdout);
 		const outcome = outcomeOf(planned.config, agent.stdout, prompt, started);
@@ -184,6 +199,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir }: RunCont
 		failed = true;
 	} finally {
 		if (gitDir) await removeWorkspace(gitDir);
+		if (planned.config.container) await removeContainer(exec, name, options.docker);
 		if (home) await removeWorkspace(home);
 		if (!options.keep) await removeWorkspace(clone);
 	}
@@ -239,15 +255,23 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	}
 	const evalId = evalIdOf(spec.name);
 	const evalDir = join(options.out, evalId);
-	// The version of each agent CLI of the spec. A Claude-only eval keeps the plain version string.
-	const agents = [...new Set(spec.configs.map((config) => config.agent ?? 'claude'))];
+	// The version of each agent CLI of the spec. A Claude-only eval keeps the plain version string. A container config
+	// takes the image tag: the tag names the Dockerfile, which pins the CLI versions.
+	const image = imageTag();
+	const agents = [...new Set(spec.configs.filter((config) => !config.container).map((config) => config.agent ?? 'claude'))];
 	const versions: Partial<Record<AgentName, string>> = {};
 	for (const agent of agents) {
 		const version = await exec(options.bin[agent], ['--version']);
 		versions[agent] = version.code === 0 && version.stdout.trim() ? version.stdout.trim() : 'unknown';
 	}
-	const versionOf = (config: Config) => versions[config.agent ?? 'claude']!;
-	const cliVersion = agents.length === 1 && agents[0] === 'claude' ? versions.claude! : agents.map((agent) => `${agent} ${versions[agent]}`).join(', ');
+	const containers = spec.configs.some((config) => config.container);
+	const versionOf = (config: Config) => (config.container ? image : versions[config.agent ?? 'claude']!);
+	const parts = [...agents.map((agent) => `${agent} ${versions[agent]}`), ...(containers ? [image] : [])];
+	const cliVersion = agents.length === 1 && agents[0] === 'claude' && !containers ? versions.claude! : parts.join(', ');
+	if (containers && !options.dryRun && !(await imageExists(exec, image, options.docker))) {
+		console.error(`The image ${image} is missing. Build it with: npm run eval:image`);
+		return { code: 2 };
+	}
 	const cacheDir = join(options.out, 'cache');
 	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
@@ -259,15 +283,16 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	console.log(`Eval ${evalId}: ${planned.length} runs (${spec.configs.length} configs x ${spec.runs}, ${reused.length} from the cache) on ${spec.task.repo} at ${baseSha.slice(0, 7)}`);
 	for (const run of planned) {
 		const agent = run.config.agent ?? 'claude';
-		const { args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id) }, '<prompt>', '<home>', join(tmpdir(), 'eval-runner', evalId, run.id));
-		console.log(`${run.id} config=${run.config.name} agent=${agent} model=${run.config.model ?? 'default'} clone=${join(tmpdir(), 'eval-runner', evalId, run.id)} argv: ${options.bin[agent]} ${args.join(' ')}`);
+		const clone = join(tmpdir(), 'eval-runner', evalId, run.id);
+		const { command, args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id) }, '<prompt>', { home: '<home>', clone, image, name: containerName(evalId, run.id) }, options);
+		console.log(`${run.id} config=${run.config.name} agent=${agent}${run.config.container ? ' (container)' : ''} model=${run.config.model ?? 'default'} clone=${clone} argv: ${command} ${args.join(' ')}`);
 	}
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
 	if (options.dryRun) return { code: 0 };
 
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	mkdirSync(join(evalDir, 'runs'), { recursive: true });
-	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir };
+	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image };
 	const runs: RunRecord[] = [...reused];
 	let spent = 0;
 	let anyFailed = false;

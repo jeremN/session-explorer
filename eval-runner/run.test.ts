@@ -266,7 +266,7 @@ test('a codex config and an opencode config: AGENTS.md, private config homes, ev
 		runs: 1,
 		configs: [
 			{ name: 'codex', agent: 'codex', model: 'gpt-x', claudeMd: { text: 'Be terse.\n' }, price: { input: 1, output: 10, cacheRead: 0.1 } },
-			{ name: 'opencode', agent: 'opencode', sandbox: false }
+			{ name: 'opencode', agent: 'opencode', model: 'go/flash', sandbox: false }
 		]
 	});
 	const fixtures = join(import.meta.dirname, 'fixtures');
@@ -307,11 +307,49 @@ test('a codex config and an opencode config: AGENTS.md, private config homes, ev
 
 test('an agent that writes in the source repository stops the eval, and its run is an error', async () => {
 	const out = join(root, 'out-escape');
-	const spec = writeSpec('escape', { runs: 2, configs: [{ name: 'opencode', agent: 'opencode', sandbox: false }] });
+	const spec = writeSpec('escape', { runs: 2, configs: [{ name: 'opencode', agent: 'opencode', model: 'go/flash', sandbox: false }] });
 	const result = await cli([spec, '--out', out, '--opencode', join(import.meta.dirname, 'fixtures', 'fake-opencode.mjs')], { FAKE_AGENT_ESCAPE: join(repo, 'escaped.txt') });
 	rmSync(join(repo, 'escaped.txt'), { force: true });
 	assert.equal(result.code, 1);
 	assert.match(result.stderr, /changed the working tree/);
 	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
 	assert.deepEqual(saved.runs.map((run: { id: string; status: string }) => [run.id, run.status]), [['opencode-1', 'error']]);
+});
+
+test('a container config runs the agent through docker: the clone and a private home only, no PWD, and the container is removed', async () => {
+	const out = join(root, 'out-container');
+	const record = join(root, 'container-record.json');
+	const log = join(root, 'docker.log');
+	const codexAuth = join(root, 'codex-auth-container');
+	mkdirSync(codexAuth);
+	writeFileSync(join(codexAuth, 'auth.json'), '{}');
+	const spec = writeSpec('container', { runs: 1, configs: [{ name: 'codex', agent: 'codex', model: 'gpt-x', container: true, containerEnv: ['FAKE_AGENT_RECORD'], price: { input: 1, output: 10, cacheRead: 0.1 } }] });
+	const docker = join(import.meta.dirname, 'fixtures', 'fake-docker.mjs');
+	const missing = await cli([spec, '--out', out, '--docker', docker], { FAKE_DOCKER_NO_IMAGE: '1' });
+	assert.equal(missing.code, 2);
+	assert.match(missing.stderr, /npm run eval:image/);
+
+	const result = await cli([spec, '--out', out, '--docker', docker], { FAKE_AGENT_RECORD: record, FAKE_DOCKER_LOG: log, CODEX_HOME: codexAuth });
+	assert.equal(result.code, 0, result.stderr);
+	const calls = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+	const run = calls.find((call) => call.args[0] === 'run');
+	const args: string[] = run.args;
+	const after = (flag: string) => args.flatMap((value, index) => (args[index - 1] === flag ? [value] : []));
+	assert.deepEqual(after('-v').map((mount) => mount.slice(mount.lastIndexOf(':') + 1)), ['/work', '/home/agent']);
+	// Codex runs without its bwrap sandbox: the container is the boundary.
+	assert.equal(args[args.indexOf('--sandbox') + 1], 'danger-full-access');
+	assert.ok(after('-e').includes('FAKE_AGENT_RECORD'));
+	assert.equal(after('-e').includes('PWD'), false);
+	assert.equal(run.passed.CODEX_HOME, '/home/agent/.codex');
+	// No value goes in the argv.
+	assert.equal(args.some((value) => value.includes(record)), false);
+	assert.ok(args.includes('--cap-drop') && args.includes('no-new-privileges'));
+	const name = after('--name')[0];
+	assert.ok(calls.some((call) => call.args[0] === 'rm' && call.args.includes(name)));
+	const seen = JSON.parse(readFileSync(record, 'utf8'));
+	assert.deepEqual(seen.homeFiles, ['auth.json']);
+	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
+	assert.equal(saved.runs[0].status, 'ok');
+	assert.equal(saved.runs[0].acceptance.passed, true);
+	assert.match(saved.cliVersion, /^eval-runner-agents:[0-9a-f]{12}$/);
 });

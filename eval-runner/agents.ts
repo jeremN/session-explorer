@@ -57,8 +57,9 @@ export function codexHome(source = process.env.CODEX_HOME ?? join(homedir(), '.c
 
 // `workspace-write`: the shell writes only in the clone, with no network. The prompt goes on stdin (`-`): Codex reads
 // stdin to its end, so the runner must close it.
-export function codexInvocation(config: Config, home: string, prompt: string): Invocation {
-	const args = ['exec', '--json', '--sandbox', 'workspace-write', '--ephemeral', '--ignore-rules', '--skip-git-repo-check'];
+// In a container, the container is the boundary: `danger-full-access` (see container.ts).
+export function codexInvocation(config: Config, home: string, prompt: string, sandbox: 'workspace-write' | 'danger-full-access' = 'workspace-write'): Invocation {
+	const args = ['exec', '--json', '--sandbox', sandbox, '--ephemeral', '--ignore-rules', '--skip-git-repo-check'];
 	if (config.model) args.push('--model', config.model);
 	args.push('-');
 	return { args, files: [], env: { ...AGENT_ENV, CODEX_HOME: home }, input: prompt };
@@ -135,11 +136,12 @@ export function codexOutcome(stdout: string, { model, prompt, start, price }: { 
 // opencode has no sandbox. It works in $PWD, not in the cwd of its process: without `--dir`, an inherited PWD sends it
 // into the source repository. The empty XDG_CONFIG_HOME keeps the user config (MCP servers, plugins) out, and
 // OPENCODE_DISABLE_CLAUDE_CODE keeps out ~/.claude/CLAUDE.md and the Claude Code skills, which opencode reads by default.
-export function opencodeInvocation(config: Config, configHome: string, prompt: string, dir: string): Invocation {
+// In a container, the home is empty already: no XDG_CONFIG_HOME (`configHome` undefined).
+export function opencodeInvocation(config: Config, configHome: string | undefined, prompt: string, dir: string): Invocation {
 	const args = ['run', '--format', 'json', '--auto', '--pure', '--dir', dir];
 	if (config.model) args.push('--model', config.model);
 	args.push('--', prompt);
-	return { args, files: [], env: { ...AGENT_ENV, XDG_CONFIG_HOME: configHome, OPENCODE_DISABLE_CLAUDE_CODE: '1' }, input: '' };
+	return { args, files: [], env: { ...AGENT_ENV, ...(configHome ? { XDG_CONFIG_HOME: configHome } : {}), OPENCODE_DISABLE_CLAUDE_CODE: '1' }, input: '' };
 }
 
 export function opencodeConfigHome() {
