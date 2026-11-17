@@ -24,6 +24,8 @@ test('the key ignores the config name and the repo path, and changes with what t
 	assert.notEqual(key({ task: { prompt: 'Fix it now.' } }), same);
 	assert.notEqual(key({ task: { acceptance: { command: 'npm run check', timeoutSec: 300 } } }), same);
 	assert.notEqual(key({ task: { hiddenTests: { commit: 'x', paths: ['a.test.ts'] } } }), same);
+	assert.notEqual(key({ task: { setup: { command: 'npm ci', timeoutSec: 600 } } }), same);
+	assert.equal(key({ task: { category: 'fast' } }), same);
 	assert.notEqual(key({ config: { model: 'opus' } }), same);
 	assert.notEqual(key({ config: { claudeMd: { text: 'Be terse.' } } }), same);
 	assert.notEqual(key({ cli: '2.1.326' }), same);

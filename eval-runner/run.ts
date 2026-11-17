@@ -132,6 +132,13 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		gitDir = mkdtempSync(join(tmpdir(), 'eval-runner-git-'));
 		chmodSync(gitDir, 0o700);
 		const { setupSha, fileMode } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
+		// The setup command (an install) runs after the setup commit: its untracked output (node_modules) stays out of
+		// the diff, as long as .gitignore lists it.
+		if (spec.task.setup) {
+			const prepared = await exec('sh', ['-c', spec.task.setup.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.setup.timeoutSec * 1000 });
+			writeFileSync(join(runDir, 'setup.log'), (prepared.stdout + prepared.stderr).slice(-64 * 1024));
+			if (prepared.code !== 0 || prepared.timedOut) throw new Error(`setup failed (${prepared.timedOut ? 'timeout' : `exit code ${prepared.code}`}): see setup.log`);
+		}
 		const agentName = planned.config.agent ?? 'claude';
 		const prompt = spec.task.prompt ?? '';
 		if (planned.config.container) home = containerHome(planned.config.agent!);

@@ -32,7 +32,7 @@ export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task:
 	for (const field of ['settings', 'mcpConfig'] as const) if (typeof rest[field] === 'string') files[field] = { content: contentOf(rest[field] as string) };
 	for (const field of ['skills', 'plugins'] as const) if (Array.isArray(rest[field])) files[field] = (rest[field] as string[]).map((path) => contentOf(path));
 	const prompt = task.prompt ?? (task.promptFile ? contentOf(task.promptFile) : '');
-	return sha(JSON.stringify({ schema: SCHEMA, baseSha, prompt, timeoutSec: task.timeoutSec, acceptance: task.acceptance, specDir, hiddenTests: task.hiddenTests ?? null, config: files, cliVersion }));
+	return sha(JSON.stringify({ schema: SCHEMA, baseSha, prompt, timeoutSec: task.timeoutSec, acceptance: task.acceptance, setup: task.setup ?? null, specDir, hiddenTests: task.hiddenTests ?? null, config: files, cliVersion }));
 }
 
 export function readCache(dir: string, key: string): CacheEntry[] {

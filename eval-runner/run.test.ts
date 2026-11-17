@@ -354,3 +354,32 @@ test('a container config runs the agent through docker: the clone and a private 
 	assert.equal(saved.runs[0].acceptance.passed, true);
 	assert.match(saved.cliVersion, /^eval-runner-agents:[0-9a-f]{12}$/);
 });
+
+test('task.setup runs in the clone before the agent, stays out of the diff when ignored, and a failed setup is an error', async () => {
+	const out = join(root, 'out-setup');
+	// The runner diffs with its own copy of the git dir, without info/exclude: only a committed .gitignore hides a file.
+	const ignoring = join(root, 'repo-ignore');
+	mkdirSync(ignoring);
+	await git(ignoring, 'init', '-q', '-b', 'main');
+	writeFileSync(join(ignoring, '.gitignore'), 'deps/\n');
+	await git(ignoring, 'add', '-A');
+	await git(ignoring, '-c', 'user.email=test@localhost', '-c', 'user.name=test', 'commit', '-q', '-m', 'init');
+	const spec = writeSpec('setup', {
+		runs: 1,
+		task: { repo: ignoring, prompt: 'Make the change.', timeoutSec: 60, setup: { command: 'mkdir -p deps && echo ready > deps/marker' }, acceptance: { command: 'test -f deps/marker && grep -q "agent was here" agent-output.txt' } },
+		configs: [{ name: 'baseline' }]
+	});
+	const result = await cli([spec, '--out', out, '--claude', FAKE]);
+	assert.equal(result.code, 0, result.stderr);
+	const dir = join(evalDir(out), 'runs', 'baseline-1');
+	assert.equal(JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8')).runs[0].acceptance.passed, true);
+	assert.doesNotMatch(readFileSync(join(dir, 'diff.patch'), 'utf8'), /deps\/marker/);
+	assert.ok(existsSync(join(dir, 'setup.log')));
+
+	const broken = writeSpec('setup-broken', { runs: 1, task: { repo, prompt: 'x', timeoutSec: 60, setup: { command: 'exit 3' }, acceptance: { command: 'true' } }, configs: [{ name: 'baseline' }] });
+	const failed = await cli([broken, '--out', join(root, 'out-setup-broken'), '--claude', FAKE]);
+	assert.equal(failed.code, 1);
+	const run = JSON.parse(readFileSync(join(evalDir(join(root, 'out-setup-broken')), 'eval.json'), 'utf8')).runs[0];
+	assert.equal(run.status, 'error');
+	assert.match(run.note, /setup failed \(exit code 3\)/);
+});

@@ -204,6 +204,10 @@ Limits:
 
 Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.
 
+### Setup command
+
+`task.setup` (`{ "command", "timeoutSec" }`, default 600 s) runs in the clone after the setup commit and before the agent, for example `pnpm install --frozen-lockfile`. Its output goes to `setup.log`. A failed setup makes the run an error. The diff uses the git dir of the runner, which has no `info/exclude`: only a committed `.gitignore` keeps the installed files out of the diff. In a container, the agent sees dependencies that were installed on the host: a native module built for macOS does not load in the Linux container. The setup command is part of the cache key.
+
 ### Routing table
 
 `npm run eval:matrix` reads every `eval.json` of the output folder and prints, per task category, the pass rate, the median cost and the median time of each route (agent and model). It writes `matrix.json` and `matrix.md` next to the evals.

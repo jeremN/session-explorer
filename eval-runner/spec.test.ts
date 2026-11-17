@@ -139,3 +139,10 @@ test('container: codex and opencode only, containerEnv names only with a contain
 	failure(withConfig({ agent: 'codex', container: true, containerEnv: ['A=b'] }), 'spec.configs[0].containerEnv');
 	failure(withConfig({ agent: 'codex', container: 'yes' }), 'spec.configs[0].container');
 });
+
+test('task.setup: a command with a default timeout of 600 s', () => {
+	const spec = validateSpec({ ...base(), task: { ...base().task, setup: { command: 'pnpm install --frozen-lockfile' } } }, '/s');
+	assert.deepEqual(spec.task.setup, { command: 'pnpm install --frozen-lockfile', timeoutSec: 600 });
+	failure({ ...base(), task: { ...base().task, setup: { command: '' } } }, 'spec.task.setup.command');
+	failure({ ...base(), task: { ...base().task, setup: { command: 'x', other: 1 } } }, 'spec.task.setup.other');
+});

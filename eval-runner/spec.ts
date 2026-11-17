@@ -39,7 +39,7 @@ export type Spec = {
 	name: string;
 	dir: string;
 	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
-	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
+	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
 	budget: { perRunUsd: number; perEvalUsd: number };
 	runs: number;
 	configs: Config[];
@@ -73,12 +73,18 @@ function strings(value: unknown, field: string): string[] {
 	return value.map((item, index) => string(item, `${field}[${index}]`));
 }
 
+// A command that prepares the clone before the agent starts, for example `pnpm install --frozen-lockfile`.
+function setupOf(value: unknown) {
+	const setup = object(value, 'spec.task.setup', ['command', 'timeoutSec']);
+	return { command: string(setup.command, 'spec.task.setup.command'), timeoutSec: optional(setup.timeoutSec, 'spec.task.setup.timeoutSec', (entry, field) => number(entry, field, 1)) ?? 600 };
+}
+
 export function validateSpec(raw: unknown, dir: string): Spec {
 	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs']);
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
-	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'acceptance', 'hiddenTests']);
+	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'setup', 'acceptance', 'hiddenTests']);
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
@@ -186,6 +192,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			...(prompt === undefined ? {} : { prompt }),
 			...(promptFile === undefined ? {} : { promptFile: resolve(dir, promptFile) }),
 			timeoutSec: optional(task.timeoutSec, 'spec.task.timeoutSec', (value, field) => number(value, field, 1)) ?? 900,
+			...(task.setup === undefined || task.setup === null ? {} : { setup: setupOf(task.setup) }),
 			acceptance: {
 				command: string(acceptance.command, 'spec.task.acceptance.command'),
 				timeoutSec: optional(acceptance.timeoutSec, 'spec.task.acceptance.timeoutSec', (value, field) => number(value, field, 1)) ?? 300
