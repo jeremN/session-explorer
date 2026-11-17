@@ -19,7 +19,13 @@
 	"configs": [
 		{
 			"name": "codex",
-			"agent": "codex"
+			"agent": "codex",
+			"model": "gpt-6-astra",
+			"price": {
+				"input": 10,
+				"output": 50,
+				"cacheRead": 0.1
+			}
 		},
 		{
 			"name": "opencode",
