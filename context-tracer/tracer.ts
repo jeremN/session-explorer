@@ -35,8 +35,9 @@ function compile(config: Config) {
 		memoryCollections: new Set(config.memory?.collections ?? []),
 		// The home `.claude` holds plans and memory. A repository `.claude/worktrees` holds code.
 		// An edit in a brain repository writes the brain. It is not a task that should search it.
-		notARepository: new RegExp(`^\\/(?:Users|home)\\/[^/]+\\/\\.claude\\/|^\\/(?:private\\/)?tmp\\/${brainOrHome}`),
-		shellNotARepository: new RegExp(`(?:~|\\$HOME|\\/(?:Users|home)\\/[^/\\s]+)\\/\\.claude\\/|\\/tmp\\/${brainOrHome}`)
+		// A clone of the eval runner sits under /tmp on Linux (os.tmpdir()). It is a repository, not a scratch file.
+		notARepository: new RegExp(`^\\/(?:Users|home)\\/[^/]+\\/\\.claude\\/|^\\/(?:private\\/)?tmp\\/(?!(?:\\S*\\/)?eval-runner\\/)${brainOrHome}`),
+		shellNotARepository: new RegExp(`(?:~|\\$HOME|\\/(?:Users|home)\\/[^/\\s]+)\\/\\.claude\\/|\\/tmp\\/(?!(?:\\S*\\/)?eval-runner\\/)${brainOrHome}`)
 	};
 }
 let knowledge = compile({});

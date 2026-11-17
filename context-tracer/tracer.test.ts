@@ -86,6 +86,9 @@ test('an edit in a repository opens the task; plan, memory and temp files do not
 	assert.equal(classify('Write', { file_path: `${MEMORY}/MEMORY.md` }), undefined);
 	assert.equal(classify('Write', { file_path: '/private/tmp/claude-1000/x/scratchpad/probe.mjs' }), undefined);
 	assert.equal(classify('Edit', { file_path: `${WIKI}/playbooks/testing.md` }), undefined);
+	// On Linux the clones of the eval runner sit under /tmp. They are repositories.
+	assert.equal(classify('Write', { file_path: '/tmp/eval-runner/20261117-agents/codex-1/a.ts' }), 'edit');
+	assert.equal(classify('Bash', { command: "sed -i 's/a/b/' /tmp/eval-runner/e/codex-1/a.ts" }), 'edit');
 });
 
 test('shell in-place edits open the task; a commit does not', () => {
