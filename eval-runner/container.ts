@@ -119,7 +119,9 @@ export function containerize(invocation: Invocation, command: string, run: Conta
 		Object.assign(env, { HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: 'localhost,127.0.0.1', no_proxy: 'localhost,127.0.0.1' });
 	}
 	const args = ['run', '--rm', '--init', '-i', '--name', run.name, '--user', run.user, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '4g', '--cpus', '2'];
-	if (run.network) args.push('--network', run.network.network);
+	// The embedded DNS of Docker still resolves the proxy alias. --dns sets where it forwards the other names: to an
+	// address with no server, so a DNS query cannot carry data out (older Docker versions forward from internal networks).
+	if (run.network) args.push('--network', run.network.network, '--dns', '127.0.0.1');
 	args.push('-v', `${run.clone}:${WORK}`, '-v', `${run.home}:${HOME}`, '-w', WORK);
 	for (const name of Object.keys(env).sort()) args.push('-e', name);
 	args.push(run.image, command, ...invocation.args);

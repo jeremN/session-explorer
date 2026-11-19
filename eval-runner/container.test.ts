@@ -100,6 +100,7 @@ test('containerize passes each variable by name only, never PWD, and keeps the a
 		assert.equal(started.args.includes('--network'), false);
 		const filtered = containerize({ args: [], files: [], env: {}, input: '' }, 'codex', { image: 'img:1', name: 'n', clone: '/c', home: '/h', user: '1:2', network: networkOf('n', ['chatgpt.com']) });
 		assert.equal(filtered.args[filtered.args.indexOf('--network') + 1], 'n-net');
+		assert.equal(filtered.args[filtered.args.indexOf('--dns') + 1], '127.0.0.1');
 		assert.equal(filtered.env.HTTPS_PROXY, 'http://eval-proxy:3128');
 		assert.equal(filtered.env.no_proxy, 'localhost,127.0.0.1');
 	} finally {

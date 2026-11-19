@@ -24,12 +24,13 @@ test('isAllowed: a listed host on port 443, or a host under a *. entry, and noth
 	assert.equal(isAllowed('chatgpt.com:443', []), false);
 });
 
-// CONNECT through the proxy, and return the status code and the socket of the tunnel.
-function tunnel(proxyPort: number, target: string): Promise<{ status: number; socket: Socket }> {
+// CONNECT through the proxy, and return the status code, the socket of the tunnel, and the first bytes of the tunnel
+// when they came in the same packet as the status line (Node gives them apart, as `head`).
+function tunnel(proxyPort: number, target: string): Promise<{ status: number; socket: Socket; head: Buffer }> {
 	return new Promise((resolve, reject) => {
 		const req = request({ port: proxyPort, method: 'CONNECT', path: target });
-		req.on('connect', (response, socket) => resolve({ status: response.statusCode ?? 0, socket }));
-		req.on('response', (response) => resolve({ status: response.statusCode ?? 0, socket: response.socket }));
+		req.on('connect', (response, socket, head) => resolve({ status: response.statusCode ?? 0, socket, head }));
+		req.on('response', (response) => resolve({ status: response.statusCode ?? 0, socket: response.socket, head: Buffer.alloc(0) }));
 		req.on('error', reject);
 		req.end();
 	});
@@ -50,7 +51,7 @@ test('the proxy opens a tunnel to a listed host, refuses the others and plain HT
 
 	const open = await tunnel(proxyPort, `localhost:${upstreamPort}`);
 	assert.equal(open.status, 200);
-	const chunks: Buffer[] = [];
+	const chunks: Buffer[] = [open.head];
 	for await (const chunk of open.socket) chunks.push(chunk as Buffer);
 	assert.equal(Buffer.concat(chunks).toString(), 'hello from upstream');
 

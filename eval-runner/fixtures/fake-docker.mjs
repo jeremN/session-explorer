@@ -24,7 +24,7 @@ if (args[0] === 'logs') {
 if (args[0] === 'run' && args[1] === '-d') process.exit(0);
 if (args[0] !== 'run') process.exit(2);
 
-const WITH_VALUE = new Set(['--name', '--user', '--cap-drop', '--security-opt', '--pids-limit', '--memory', '--cpus', '--network', '-v', '-w', '-e']);
+const WITH_VALUE = new Set(['--name', '--user', '--cap-drop', '--security-opt', '--pids-limit', '--memory', '--cpus', '--network', '--dns', '-v', '-w', '-e']);
 const mounts = {};
 const names = [];
 let index = 1;

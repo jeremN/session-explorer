@@ -54,7 +54,8 @@ export function startProxy(allow: readonly string[], { port = PROXY_PORT, ports 
 			else if (!client.destroyed) client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
 		});
 		client.on('close', () => upstream.destroy());
-		upstream.on('close', () => client.destroy());
+		// end, not destroy: the client may still have bytes of the upstream to receive.
+		upstream.on('close', () => client.end());
 	});
 	server.listen(port, () => log({ listening: (server.address() as { port: number }).port, allow }));
 	return server;
