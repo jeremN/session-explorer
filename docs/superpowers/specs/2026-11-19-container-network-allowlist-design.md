@@ -39,7 +39,8 @@ The user chose a Node proxy with no dependency, and the npm registry out of the 
   `proxy.ts` and `allow.json`: a change of the filter gives a new tag, so no cached run from another filter is reused.
 - `containerAllow` (spec, only with `container: true`) adds hosts to the default list of the agent.
 - Per run, the runner creates the network `<container name>-net` (`--internal`), starts `<container name>-proxy`
-  (detached, no capability, read-only, 128 MB), connects it to the network, and waits for its `listening` line. The
+  (detached, no capability, read-only, 128 MB), connects it to the network under the alias `eval-proxy`, and waits for its `listening` line. The agent
+  uses the alias: the container name is too long for a DNS label (63 characters at most). The
   agent container joins the network and gets `HTTPS_PROXY`, `HTTP_PROXY` (both cases) and
   `NO_PROXY=localhost,127.0.0.1`.
 - After the agent: the runner removes the agent container, saves `docker logs` of the proxy to `network.log`, removes
