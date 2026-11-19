@@ -84,6 +84,10 @@ test('containerHome holds the login of the agent and nothing else, in a private 
 	const config = readFileSync(join(keyed, '.config', 'opencode', 'opencode.json'), 'utf8');
 	assert.deepEqual(JSON.parse(config), { provider: { 'opencode-go': { options: { apiKey: '{env:OPENCODE_GO_API_KEY}' } } } });
 	assert.equal(config.includes('value-that-must-not-show'), false);
+	// The other name works too, and the config names the variable that is set.
+	const other2 = containerHome('opencode', { codex, opencode }, { OPENCODE_API_KEY: 'x' });
+	after(() => rmSync(other2, { recursive: true, force: true }));
+	assert.equal(JSON.parse(readFileSync(join(other2, '.config', 'opencode', 'opencode.json'), 'utf8')).provider['opencode-go'].options.apiKey, '{env:OPENCODE_API_KEY}');
 });
 
 test('containerize passes each variable by name only, never PWD, and keeps the agent argv after the image', () => {

@@ -84,8 +84,9 @@ export async function imageExists(exec: Exec, tag: string, docker = 'docker') {
 }
 
 // opencode keeps its valid key in its background service, and its auth.json can still hold an expired key. When this
-// host variable is set, opencode in the container reads its key from it, and the container gets no auth.json.
-export const OPENCODE_KEY_ENV = 'OPENCODE_GO_API_KEY';
+// host variable is set, opencode in the container reads its key from it, and the container gets no auth.json. Both
+// names are accepted; the first that is set wins.
+export const OPENCODE_KEY_ENVS = ['OPENCODE_GO_API_KEY', 'OPENCODE_API_KEY'];
 
 // The private home of one run: the login of the agent and nothing else. It is mounted at /home/agent.
 export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { codex: process.env.CODEX_HOME ?? join(homedir(), '.codex'), opencode: join(homedir(), '.local', 'share', 'opencode') }, env: NodeJS.ProcessEnv = process.env) {
@@ -96,9 +97,10 @@ export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { co
 	if (agent === 'opencode') {
 		const config = join(home, '.config', 'opencode');
 		mkdirSync(config, { recursive: true });
-		if (env[OPENCODE_KEY_ENV]) {
+		const keyEnv = OPENCODE_KEY_ENVS.find((name) => env[name]);
+		if (keyEnv) {
 			// The file names the variable, never its value: docker passes the value with `-e NAME`.
-			writeFileSync(join(config, 'opencode.json'), JSON.stringify({ provider: { 'opencode-go': { options: { apiKey: `{env:${OPENCODE_KEY_ENV}}` } } } }));
+			writeFileSync(join(config, 'opencode.json'), JSON.stringify({ provider: { 'opencode-go': { options: { apiKey: `{env:${keyEnv}}` } } } }));
 			return home;
 		}
 	}

@@ -203,7 +203,7 @@ Limits:
 - The filter reads the host name of the `CONNECT` request, not the TLS stream: domain fronting through an allowed host stays possible.
 - The gateway of the internal network is the Docker VM: from the agent container, a port that another container publishes (`docker run -p`) is reachable. Services of the Mac itself are not.
 - Claude Code does not run in the container: its login is in the macOS keychain. Use `sandbox: true` for Claude Code.
-- opencode keeps its valid key in its background service, and `auth.json` can hold an expired key (`401 This API key has expired` in the container). Export `OPENCODE_GO_API_KEY` on the host: the container then gets an `opencode.json` that reads the key from this variable, the variable by name, and no `auth.json`.
+- opencode keeps its valid key in its background service, and `auth.json` can hold an expired key (`401 This API key has expired` in the container). Export `OPENCODE_GO_API_KEY` or `OPENCODE_API_KEY` on the host (the first that is set wins): the container then gets an `opencode.json` that reads the key from this variable, the variable by name, and no `auth.json`.
 - The acceptance command still runs on the host, in the clone.
 
 Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.
