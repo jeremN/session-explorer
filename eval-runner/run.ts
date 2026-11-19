@@ -10,7 +10,7 @@ import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
 import { setupFiles } from './command.ts';
-import { HOME, OPENCODE_KEY_ENV, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
+import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
 import { countTests } from './testcount.ts';
 import { realExec } from './exec.ts';
@@ -105,7 +105,7 @@ const networkFor = (config: Config, name: string): Network => networkOf(name, al
 function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string }, prompt: string, where: Where, options: Options): Started {
 	if (config.container) {
 		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
-		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? [OPENCODE_KEY_ENV] : [])] }, options.docker);
+		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? OPENCODE_KEY_ENVS : [])] }, options.docker);
 	}
 	const agent = config.agent ?? 'claude';
 	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone) : claudeInvocation(config, context, prompt);
