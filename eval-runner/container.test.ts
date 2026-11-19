@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -31,6 +31,13 @@ test('containerHome holds the login of the agent and nothing else, in a private 
 	after(() => rmSync(other, { recursive: true, force: true }));
 	assert.deepEqual(readdirSync(join(other, '.local', 'share', 'opencode')), ['auth.json']);
 	assert.deepEqual(readdirSync(join(other, '.config', 'opencode')), []);
+	// With the key variable set, opencode reads the key from it: the config names the variable, and no auth.json goes in.
+	const keyed = containerHome('opencode', { codex, opencode }, { OPENCODE_GO_API_KEY: 'value-that-must-not-show' });
+	after(() => rmSync(keyed, { recursive: true, force: true }));
+	assert.deepEqual(readdirSync(join(keyed, '.local', 'share', 'opencode')), []);
+	const config = readFileSync(join(keyed, '.config', 'opencode', 'opencode.json'), 'utf8');
+	assert.deepEqual(JSON.parse(config), { provider: { 'opencode-go': { options: { apiKey: '{env:OPENCODE_GO_API_KEY}' } } } });
+	assert.equal(config.includes('value-that-must-not-show'), false);
 });
 
 test('containerize passes each variable by name only, never PWD, and keeps the agent argv after the image', () => {
