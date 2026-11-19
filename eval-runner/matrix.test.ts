@@ -88,3 +88,16 @@ test('verdictOf: an agent that stopped partway or ran out of time failed; a run 
 	assert.deepEqual(matrix.categories[0].routes.map((route) => [route.route, route.passed, route.n]), [['codex/gpt-x', 1, 3]]);
 	assert.equal(matrix.excluded.errors, 0);
 });
+
+test('testShare: the mean share of tests passed per task, then the mean of the tasks', () => {
+	const counted = (id: string, passed: number, total: number) => run(id, 'sonnet', passed === total, 0.1, { acceptance: { exitCode: passed === total ? 0 : 1, passed: passed === total, timedOut: false, durationMs: 1, tests: { passed, total } } });
+	// Task A: 0.9 and 0.5, mean 0.7. Task B: 1.0. The mean of the tasks is 0.85, whatever the number of runs or tests.
+	const a = evalOf('e1', 'Fix A.', 'strong', CONFIGS, [counted('sonnet-1', 18, 20), counted('sonnet-2', 10, 20), run('codex-1', 'codex', false, 0.2)]);
+	const b = evalOf('e2', 'Fix B.', 'strong', CONFIGS, [counted('sonnet-1', 54, 54)]);
+	const matrix = buildMatrix([a, b]);
+	const [sonnet, codex] = matrix.categories[0].routes;
+	assert.equal(sonnet.testShare, 0.85);
+	assert.equal(codex.testShare, undefined);
+	assert.match(renderMarkdown(matrix), /\| claude\/sonnet \| 1\/3 \| 85 % \|/);
+	assert.match(renderMarkdown(matrix), /\| codex\/gpt-x \| 0\/1 \| — \|/);
+});

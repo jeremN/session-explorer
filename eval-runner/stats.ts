@@ -1,4 +1,6 @@
 // Aggregates over the runs of one configuration. Pure functions, no file access.
+import type { TestCount } from './testcount.ts';
+
 export type Status = 'ok' | 'timeout' | 'budget' | 'error' | 'skipped';
 export type RunMetrics = {
 	// Absent when the agent gives no cost and the config no price.
@@ -21,7 +23,8 @@ export type RunRecord = {
 	config: string;
 	status: Status;
 	sessionId?: string;
-	acceptance?: { exitCode: number | null; passed: boolean; timedOut: boolean; durationMs: number };
+	// `tests`: what the test runner of the check counted (see testcount.ts), when the check is a test run.
+	acceptance?: { exitCode: number | null; passed: boolean; timedOut: boolean; durationMs: number; tests?: TestCount };
 	wallSec?: number;
 	cliCostUsd?: number | null;
 	diff?: { files: number; added: number; deleted: number };

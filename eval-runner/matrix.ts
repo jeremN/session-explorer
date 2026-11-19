@@ -12,10 +12,16 @@ import { median } from './stats.ts';
 import type { RunRecord } from './stats.ts';
 
 export type SavedEval = { id: string; baseSha: string; spec: { name: string; task: { prompt?: string; category?: string; acceptance: { command: string } }; configs: Config[] }; runs: RunRecord[] };
-export type RouteStats = { route: string; passed: number; n: number; cost?: number; wallSec?: number; tasks: number };
+// testShare: the share of tests passed, over the runs whose check counted its tests: the mean per task, then the mean
+// of the tasks, so a task with 54 tests weighs as much as a task with 21. It tells a near miss (19 tests of 21) from a
+// run that missed the task (10 of 21), where the pass rate sees two failures.
+export type RouteStats = { route: string; passed: number; n: number; cost?: number; wallSec?: number; testShare?: number; tasks: number };
 export type TaskRow = { key: string; name: string; category: string; routes: Record<string, { passed: number; n: number }>; discriminating: boolean };
 export type Proposal = { route: string; reason: string } | { route: null; reason: string };
 export type CategoryRow = { category: string; routes: RouteStats[]; tasks: number; discriminating: number; proposal: Proposal; matrix?: string };
+
+const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+const meanOfTasks = (shares: Map<string, number[]>) => Math.round(mean([...shares.values()].map(mean)) * 10_000) / 10_000;
 
 // A route needs this many runs in a category before it can be proposed.
 export const MIN_RUNS = 3;
@@ -40,7 +46,7 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 	const seen = new Set<string>(excluded);
 	const tasks = new Map<string, TaskRow>();
 	// Runs per category and route, for the medians.
-	const samples = new Map<string, { passed: number; n: number; costs: number[]; walls: number[]; tasks: Set<string> }>();
+	const samples = new Map<string, { passed: number; n: number; costs: number[]; walls: number[]; shares: Map<string, number[]>; tasks: Set<string> }>();
 	let errors = 0;
 	let experiments = 0;
 	for (const ev of [...evals].sort((a, b) => a.id.localeCompare(b.id))) {
@@ -83,11 +89,13 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 			if (seen.has(id) || verdict === 'out' || !config || EXPERIMENT_FIELDS.some((field) => config[field] !== undefined)) continue;
 			seen.add(id);
 			const slot = `${task.category}\0${routeOf(config)}`;
-			const sample = samples.get(slot) ?? { passed: 0, n: 0, costs: [], walls: [], tasks: new Set() };
+			const sample = samples.get(slot) ?? { passed: 0, n: 0, costs: [], walls: [], shares: new Map(), tasks: new Set() };
 			sample.n++;
 			if (verdict === 'pass') sample.passed++;
 			if (typeof run.metrics?.cost === 'number') sample.costs.push(run.metrics.cost);
 			if (typeof run.wallSec === 'number') sample.walls.push(run.wallSec);
+			const tests = run.acceptance?.tests;
+			if (tests) sample.shares.set(task.key, [...(sample.shares.get(task.key) ?? []), tests.passed / tests.total]);
 			sample.tasks.add(task.key);
 			samples.set(slot, sample);
 		}
@@ -108,6 +116,7 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 				n: sample.n,
 				...(sample.costs.length ? { cost: median(sample.costs) } : {}),
 				...(sample.walls.length ? { wallSec: median(sample.walls) } : {}),
+				...(sample.shares.size ? { testShare: meanOfTasks(sample.shares) } : {}),
 				tasks: sample.tasks.size
 			}))
 			.sort((a, b) => b.passed / b.n - a.passed / a.n || (a.cost ?? Infinity) - (b.cost ?? Infinity));
@@ -147,8 +156,8 @@ export function renderMarkdown(matrix: ReturnType<typeof buildMatrix>) {
 	const lines = ['# Routing table', ''];
 	for (const row of matrix.categories) {
 		lines.push(`## ${row.category}`, '', `${row.tasks} task(s), ${row.discriminating} that tell the routes apart.`, '');
-		lines.push('| Route | Pass | Median cost ($) | Median time (s) | Tasks |', '|---|---|---|---|---|');
-		for (const route of row.routes) lines.push(`| ${route.route} | ${route.passed}/${route.n} | ${money(route.cost)} | ${route.wallSec ?? '—'} | ${route.tasks} |`);
+		lines.push('| Route | Pass | Tests passed (mean per task) | Median cost ($) | Median time (s) | Tasks |', '|---|---|---|---|---|---|');
+		for (const route of row.routes) lines.push(`| ${route.route} | ${route.passed}/${route.n} | ${route.testShare === undefined ? '—' : `${Math.round(route.testShare * 100)} %`} | ${money(route.cost)} | ${route.wallSec ?? '—'} | ${route.tasks} |`);
 		lines.push('', `Proposal: ${row.proposal.route ?? 'none'}. ${row.proposal.reason}.`);
 		if (row.matrix) lines.push(`The model matrix routes this class to ${row.matrix}.`);
 		lines.push('');
