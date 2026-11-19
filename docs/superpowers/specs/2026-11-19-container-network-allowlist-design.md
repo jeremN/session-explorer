@@ -42,7 +42,9 @@ The user chose a Node proxy with no dependency, and the npm registry out of the 
   (detached, no capability, read-only, 128 MB), connects it to the network under the alias `eval-proxy`, and waits for its `listening` line. The agent
   uses the alias: the container name is too long for a DNS label (63 characters at most). The
   agent container joins the network and gets `HTTPS_PROXY`, `HTTP_PROXY` (both cases) and
-  `NO_PROXY=localhost,127.0.0.1`.
+  `NO_PROXY=localhost,127.0.0.1`. It also gets `--dns 127.0.0.1`: the embedded DNS of Docker still resolves the
+  proxy alias, and forwards the other names to an address with no server. Older Docker versions forward DNS from an
+  internal network, which would let a query carry data out.
 - After the agent: the runner removes the agent container, saves `docker logs` of the proxy to `network.log`, removes
   the proxy, then the network. The `finally` block does it again as a backstop. The record gets `blockedHosts`: the
   refused targets. When the proxy stopped before the agent, the record gets a note.
@@ -63,7 +65,14 @@ which needed `chatgpt.com` only.
   stays possible.
 - The gateway of the internal network is the Docker VM. From the agent container, a port published by another
   container (`docker run -p`) is reachable on that address. Services of the Mac itself are not.
-- Names do not resolve in the agent container. The proxy resolves them.
+- Only the proxy alias resolves in the agent container. The proxy resolves the allowed hosts.
+
+## Verification (2026-11-19)
+
+- Codex through the filter on the runner path, three runs: two smoke runs passed; a probe run had its shell run
+  `curl https://github.com` (exit 56, CONNECT refused, `github.com:443` in `blockedHosts`) and the same with
+  `--noproxy '*'` (exit 6, name not resolved).
+- With `--dns 127.0.0.1`: `eval-proxy` resolves, `example.com` does not.
 
 ## Left to the builder
 
