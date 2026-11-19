@@ -28,6 +28,8 @@ export type RunRecord = {
 	metrics?: RunMetrics;
 	mrs?: string[];
 	note?: string;
+	// The targets (host:port) that the network filter of a container run refused.
+	blockedHosts?: string[];
 	// A run reused from the cache: the eval and the run where its files are.
 	cached?: { evalId: string; id: string };
 };
