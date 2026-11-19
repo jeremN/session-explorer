@@ -12,6 +12,7 @@ import type { Invocation, Outcome } from './agents.ts';
 import { setupFiles } from './command.ts';
 import { HOME, OPENCODE_KEY_ENV, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
+import { countTests } from './testcount.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
@@ -220,7 +221,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		const checkStarted = Date.now();
 		const check = await exec('sh', ['-c', spec.task.acceptance.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.acceptance.timeoutSec * 1000 });
 		writeFileSync(join(runDir, 'acceptance.log'), (check.stdout + check.stderr).slice(-64 * 1024));
-		record.acceptance = { exitCode: check.code, passed: check.code === 0 && !check.timedOut, timedOut: check.timedOut, durationMs: Date.now() - checkStarted };
+		const tests = countTests(check.stdout + check.stderr);
+		record.acceptance = { exitCode: check.code, passed: check.code === 0 && !check.timedOut, timedOut: check.timedOut, durationMs: Date.now() - checkStarted, ...(tests ? { tests } : {}) };
 	} catch (error) {
 		record.status = 'error';
 		record.note = (error as Error).message.slice(0, 300);
