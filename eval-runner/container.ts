@@ -2,7 +2,7 @@
 // and nothing else from the host. The container is the boundary, so Codex runs without its own sandbox there: bwrap
 // cannot create a namespace in an unprivileged container, and every command of the agent failed with it.
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,13 +23,25 @@ export async function imageExists(exec: Exec, tag: string, docker = 'docker') {
 	return (await exec(docker, ['image', 'inspect', '--format', '{{.Id}}', tag])).code === 0;
 }
 
+// opencode keeps its valid key in its background service, and its auth.json can still hold an expired key. When this
+// host variable is set, opencode in the container reads its key from it, and the container gets no auth.json.
+export const OPENCODE_KEY_ENV = 'OPENCODE_GO_API_KEY';
+
 // The private home of one run: the login of the agent and nothing else. It is mounted at /home/agent.
-export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { codex: process.env.CODEX_HOME ?? join(homedir(), '.codex'), opencode: join(homedir(), '.local', 'share', 'opencode') }) {
+export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { codex: process.env.CODEX_HOME ?? join(homedir(), '.codex'), opencode: join(homedir(), '.local', 'share', 'opencode') }, env: NodeJS.ProcessEnv = process.env) {
 	const home = mkdtempSync(join(tmpdir(), 'eval-runner-home-'));
 	chmodSync(home, 0o700);
 	const login = agent === 'codex' ? { from: join(source.codex, 'auth.json'), to: join(home, '.codex') } : { from: join(source.opencode, 'auth.json'), to: join(home, '.local', 'share', 'opencode') };
 	mkdirSync(login.to, { recursive: true });
-	if (agent === 'opencode') mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+	if (agent === 'opencode') {
+		const config = join(home, '.config', 'opencode');
+		mkdirSync(config, { recursive: true });
+		if (env[OPENCODE_KEY_ENV]) {
+			// The file names the variable, never its value: docker passes the value with `-e NAME`.
+			writeFileSync(join(config, 'opencode.json'), JSON.stringify({ provider: { 'opencode-go': { options: { apiKey: `{env:${OPENCODE_KEY_ENV}}` } } } }));
+			return home;
+		}
+	}
 	if (existsSync(login.from)) copyFileSync(login.from, join(login.to, 'auth.json'));
 	return home;
 }

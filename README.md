@@ -199,7 +199,7 @@ Limits:
 
 - The network stays open: the agent needs the API of its model. An allowlist (a proxy that lets only the model API through) is not done. For Codex, this is a step back: on the host, `workspace-write` gives its shell no network; in the container, its shell has the network. Prefer the host mode for Codex when the task needs no isolation from your files.
 - Claude Code does not run in the container: its login is in the macOS keychain. Use `sandbox: true` for Claude Code.
-- opencode on this machine keeps its valid key outside `auth.json`, so opencode in the container got `401 This API key has expired`. Pass a fresh key with `containerEnv`.
+- opencode keeps its valid key in its background service, and `auth.json` can hold an expired key (`401 This API key has expired` in the container). Export `OPENCODE_GO_API_KEY` on the host: the container then gets an `opencode.json` that reads the key from this variable, the variable by name, and no `auth.json`.
 - The acceptance command still runs on the host, in the clone.
 
 Gemini CLI is not supported: a personal Google account gets `IneligibleTierError` in headless mode, and it needs a paid API key.

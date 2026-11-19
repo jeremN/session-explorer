@@ -10,7 +10,7 @@ import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
 import { setupFiles } from './command.ts';
-import { HOME, WORK, containerHome, containerName, containerize, imageExists, imageTag, removeContainer } from './container.ts';
+import { HOME, OPENCODE_KEY_ENV, WORK, containerHome, containerName, containerize, imageExists, imageTag, removeContainer } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
@@ -100,7 +100,7 @@ function invocationOf(config: Config, context: { sessionId: string; perRunUsd: n
 	if (config.container) {
 		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
 		const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
-		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user, passEnv: config.containerEnv }, options.docker);
+		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user, passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? [OPENCODE_KEY_ENV] : [])] }, options.docker);
 	}
 	const agent = config.agent ?? 'claude';
 	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone) : claudeInvocation(config, context, prompt);
