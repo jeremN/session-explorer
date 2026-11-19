@@ -10,7 +10,8 @@ import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
 import { setupFiles } from './command.ts';
-import { HOME, OPENCODE_KEY_ENV, WORK, containerHome, containerName, containerize, imageExists, imageTag, removeContainer } from './container.ts';
+import { HOME, OPENCODE_KEY_ENV, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
+import type { Network } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
@@ -93,14 +94,17 @@ function findTranscript(sessionId: string) {
 type Started = Invocation & { command: string };
 type Where = { home: string; clone: string; image: string; name: string };
 
+// The container runs as the user of the runner, so the files it writes in the clone stay yours.
+const USER = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+const networkFor = (config: Config, name: string): Network => networkOf(name, allowedHosts(config.agent as 'codex' | 'opencode', config.containerAllow));
+
 // How to start the agent of a config. `home` is the private config folder of codex or opencode (on the host, or the
 // home mounted in the container). PWD names the clone too: a CLI that reads PWD instead of its cwd (opencode does)
 // must never see the folder of the runner.
 function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string }, prompt: string, where: Where, options: Options): Started {
 	if (config.container) {
 		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
-		const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
-		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user, passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? [OPENCODE_KEY_ENV] : [])] }, options.docker);
+		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? [OPENCODE_KEY_ENV] : [])] }, options.docker);
 	}
 	const agent = config.agent ?? 'claude';
 	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone) : claudeInvocation(config, context, prompt);
@@ -125,6 +129,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 	// or a generated file.
 	let gitDir: string | undefined;
 	let home: string | undefined;
+	let network: Network | undefined;
+	let proxyDied = false;
 	mkdirSync(runDir, { recursive: true });
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
@@ -145,12 +151,24 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		else home = agentName === 'codex' ? codexHome() : agentName === 'opencode' ? opencodeConfigHome() : undefined;
 		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir }, prompt, { home: home ?? '', clone, image, name }, options);
 		for (const file of invocation.files) writeFileSync(file.path, file.content);
+		if (planned.config.container) {
+			network = networkFor(planned.config, name);
+			await startNetwork(exec, network, image, USER, options.docker);
+		}
 
 		const started = Date.now();
 		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
 		// After a timeout the container still runs: it must be gone before the diff and the acceptance command.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
+		if (network) {
+			const { log, proxyStopped } = await stopNetwork(exec, network, options.docker);
+			writeFileSync(join(runDir, 'network.log'), log);
+			const blocked = blockedTargets(log);
+			if (blocked.length) record.blockedHosts = blocked;
+			proxyDied = proxyStopped;
+			network = undefined;
+		}
 		writeFileSync(join(runDir, agentName === 'claude' ? 'claude.json' : 'events.jsonl'), agent.stdout);
 		const outcome = outcomeOf(planned.config, agent.stdout, prompt, started);
 		record.cliCostUsd = outcome.costUsd === null ? null : Math.round(outcome.costUsd * 10_000) / 10_000;
@@ -158,6 +176,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		record.status = status;
 		if (status === 'error') record.note = (agent.stderr.trim() || outcome.note || `exit code ${agent.code}`).slice(0, 300);
 		else if (outcome.note) record.note = outcome.note.slice(0, 300);
+		// A stopped proxy cuts the agent off its API: the failure is the runner's, and the note says so first.
+		if (proxyDied) record.note = `the network proxy stopped during the run (see network.log)${record.note ? `; ${record.note}` : ''}`;
 
 		// Claude Code writes its transcript. For the other agents, the adapter built it from the printed events.
 		let scored: ReturnType<typeof scoreRun>;
@@ -210,6 +230,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		if (gitDir) await removeWorkspace(gitDir);
 		// Backstop: an error between the start and the first removal.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
+		if (network) await stopNetwork(exec, network, options.docker);
 		if (home) await removeWorkspace(home);
 		if (!options.keep) await removeWorkspace(clone);
 	}
@@ -295,7 +316,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		const agent = run.config.agent ?? 'claude';
 		const clone = join(tmpdir(), 'eval-runner', evalId, run.id);
 		const { command, args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id) }, '<prompt>', { home: '<home>', clone, image, name: containerName(evalId, run.id) }, options);
-		console.log(`${run.id} config=${run.config.name} agent=${agent}${run.config.container ? ' (container)' : ''} model=${run.config.model ?? 'default'} clone=${clone} argv: ${command} ${args.join(' ')}`);
+		console.log(`${run.id} config=${run.config.name} agent=${agent}${run.config.container ? ` (container, allow ${networkFor(run.config, '').allow.join(',')})` : ''} model=${run.config.model ?? 'default'} clone=${clone} argv: ${command} ${args.join(' ')}`);
 	}
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
 	if (options.dryRun) return { code: 0 };

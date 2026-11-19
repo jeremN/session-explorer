@@ -14,9 +14,69 @@ export const DOCKERFILE_DIR = join(import.meta.dirname, 'container');
 export const WORK = '/work';
 export const HOME = '/home/agent';
 
-// The tag names the content of the Dockerfile, so a new CLI version gives a new tag and a new cache key.
-export function imageTag(dockerfile = readFileSync(join(DOCKERFILE_DIR, 'Dockerfile'))) {
-	return `eval-runner-agents:${createHash('sha256').update(dockerfile).digest('hex').slice(0, 12)}`;
+// The tag names the content of the Dockerfile, the network filter and its default hosts. A new CLI version or a new
+// filter gives a new tag, so a new cache key: no cached run from another filter is reused.
+export function imageTag(...parts: Buffer[]) {
+	const content = parts.length ? parts : ['Dockerfile', 'proxy.ts', 'allow.json'].map((file) => readFileSync(join(DOCKERFILE_DIR, file)));
+	const hash = createHash('sha256');
+	for (const part of content) hash.update(part).update('\0');
+	return `eval-runner-agents:${hash.digest('hex').slice(0, 12)}`;
+}
+
+// The hosts that the agent container may reach: the defaults of the agent (container/allow.json), and `extra` from
+// the spec.
+export function allowedHosts(agent: Exclude<AgentName, 'claude'>, extra: readonly string[] = []): string[] {
+	const defaults = JSON.parse(readFileSync(join(DOCKERFILE_DIR, 'allow.json'), 'utf8')) as Record<string, string[]>;
+	return [...new Set([...(defaults[agent] ?? []), ...extra.map((host) => host.toLowerCase())])];
+}
+
+export const PROXY_PORT = 3128;
+// The name of the proxy on the network of the run. Each run has its own network, so the alias is unique there. The
+// container name is too long for a DNS label (63 characters at most), so the agent could not resolve it.
+export const PROXY_ALIAS = 'eval-proxy';
+export type Network = { network: string; proxy: string; allow: string[] };
+export const networkOf = (name: string, allow: string[]): Network => ({ network: `${name}-net`, proxy: `${name}-proxy`, allow });
+
+// The network of one run. The agent container joins an internal network, with no route out. The proxy joins that
+// network and the default one, so it is the only way out, and it lets only the allowed hosts through.
+export async function startNetwork(exec: Exec, network: Network, image: string, user: string, docker = 'docker', wait = { tries: 50, ms: 200 }) {
+	const step = async (args: string[]) => {
+		const result = await exec(docker, args);
+		if (result.code !== 0) throw new Error(`docker ${args[0]} ${args[1]} failed: ${(result.stderr || result.stdout).trim().slice(0, 200)}`);
+		return result.stdout;
+	};
+	await step(['network', 'create', '--internal', network.network]);
+	await step(['run', '-d', '--name', network.proxy, '--user', user, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--pids-limit', '64', '--memory', '128m', '-e', `EVAL_PROXY_ALLOW=${network.allow.join(',')}`, image, 'node', '/opt/eval-runner/proxy.ts', String(PROXY_PORT)]);
+	await step(['network', 'connect', '--alias', PROXY_ALIAS, network.network, network.proxy]);
+	for (let index = 0; index < wait.tries; index++) {
+		if ((await exec(docker, ['logs', network.proxy])).stdout.includes('"listening"')) return;
+		await new Promise((resolve) => setTimeout(resolve, wait.ms));
+	}
+	throw new Error(`the network proxy ${network.proxy} did not start`);
+}
+
+// Removes the proxy and the network, and returns what the proxy logged and whether it still ran. Safe to call twice:
+// a second call finds nothing and returns an empty log.
+export async function stopNetwork(exec: Exec, network: Network, docker = 'docker') {
+	const running = (await exec(docker, ['inspect', '--format', '{{.State.Running}}', network.proxy])).stdout.trim();
+	const log = running ? (await exec(docker, ['logs', network.proxy])).stdout : '';
+	await exec(docker, ['rm', '--force', network.proxy]);
+	await exec(docker, ['network', 'rm', network.network]);
+	return { log, proxyStopped: running === 'false' };
+}
+
+// The targets that the proxy refused, from its log, in the order of the first refusal.
+export function blockedTargets(log: string): string[] {
+	const targets = new Set<string>();
+	for (const line of log.split('\n')) {
+		try {
+			const entry = JSON.parse(line) as { verdict?: string; target?: string };
+			if (entry.verdict === 'deny' && entry.target) targets.add(entry.target);
+		} catch {
+			// A line that is not JSON (a crash trace) is no decision.
+		}
+	}
+	return [...targets];
 }
 
 export async function imageExists(exec: Exec, tag: string, docker = 'docker') {
@@ -46,14 +106,20 @@ export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { co
 	return home;
 }
 
-export type ContainerRun = { image: string; name: string; clone: string; home: string; user: string; passEnv?: string[] };
+export type ContainerRun = { image: string; name: string; clone: string; home: string; user: string; passEnv?: string[]; network?: Network };
 
 // The `docker run` argv around the invocation of the agent. Every variable goes as `-e NAME`: docker reads the value
 // from its own environment, so no value shows in the argv or the process list.
 export function containerize(invocation: Invocation, command: string, run: ContainerRun, docker = 'docker'): Invocation & { command: string } {
 	const env = { ...invocation.env, ...Object.fromEntries((run.passEnv ?? []).filter((name) => process.env[name] !== undefined).map((name) => [name, process.env[name]!])) };
 	delete env.PWD;
+	// The CLIs reach their API through the proxy. A CLI that ignores these variables gets no network at all.
+	if (run.network) {
+		const proxy = `http://${PROXY_ALIAS}:${PROXY_PORT}`;
+		Object.assign(env, { HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: 'localhost,127.0.0.1', no_proxy: 'localhost,127.0.0.1' });
+	}
 	const args = ['run', '--rm', '--init', '-i', '--name', run.name, '--user', run.user, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '4g', '--cpus', '2'];
+	if (run.network) args.push('--network', run.network.network);
 	args.push('-v', `${run.clone}:${WORK}`, '-v', `${run.home}:${HOME}`, '-w', WORK);
 	for (const name of Object.keys(env).sort()) args.push('-e', name);
 	args.push(run.image, command, ...invocation.args);

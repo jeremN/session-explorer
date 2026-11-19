@@ -22,6 +22,8 @@ export type Config = {
 	container?: boolean;
 	// Names of host environment variables passed into the container, for a login the auth file does not hold.
 	containerEnv?: string[];
+	// Hosts the container may reach besides the defaults of its agent (container/allow.json): a name, or *.domain.
+	containerAllow?: string[];
 	model?: string;
 	claudeMd?: { text: string } | { file: string };
 	appendSystemPrompt?: string;
@@ -109,7 +111,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv']);
+		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -168,6 +170,12 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			if (!result.container) fail(`${at}.containerEnv`, 'only for a config with container: true');
 			for (const name of containerEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`${at}.containerEnv`, `${name} is not a variable name`);
 			result.containerEnv = containerEnv;
+		}
+		const containerAllow = optional(config.containerAllow, `${at}.containerAllow`, strings);
+		if (containerAllow) {
+			if (!result.container) fail(`${at}.containerAllow`, 'only for a config with container: true');
+			for (const host of containerAllow) if (!/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host)) fail(`${at}.containerAllow`, `${host} is not a host name or *.domain`);
+			result.containerAllow = containerAllow;
 		}
 		if (result.container && !result.agent) fail(`${at}.container`, 'only codex and opencode run in a container. Claude Code has its own sandbox (sandbox: true)');
 		if (result.price && result.agent !== 'codex') fail(`${at}.price`, 'only codex needs a price: the other agents give their cost');

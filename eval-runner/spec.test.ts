@@ -138,6 +138,9 @@ test('container: codex and opencode only, containerEnv names only with a contain
 	failure(withConfig({ agent: 'codex', containerEnv: ['X'] }), 'spec.configs[0].containerEnv');
 	failure(withConfig({ agent: 'codex', container: true, containerEnv: ['A=b'] }), 'spec.configs[0].containerEnv');
 	failure(withConfig({ agent: 'codex', container: 'yes' }), 'spec.configs[0].container');
+	assert.deepEqual(validateSpec(withConfig({ agent: 'codex', container: true, containerAllow: ['registry.npmjs.org', '*.github.com'] }), '/s').configs[0].containerAllow, ['registry.npmjs.org', '*.github.com']);
+	failure(withConfig({ agent: 'codex', containerAllow: ['registry.npmjs.org'] }), 'spec.configs[0].containerAllow');
+	for (const host of ['1.1.1.1:443', 'localhost', '*', 'https://github.com']) failure(withConfig({ agent: 'codex', container: true, containerAllow: [host] }), 'spec.configs[0].containerAllow');
 });
 
 test('task.setup: a command with a default timeout of 600 s', () => {

@@ -329,10 +329,10 @@ test('a container config runs the agent through docker: the clone and a private 
 	assert.equal(missing.code, 2);
 	assert.match(missing.stderr, /npm run eval:image/);
 
-	const result = await cli([spec, '--out', out, '--docker', docker], { FAKE_AGENT_RECORD: record, FAKE_DOCKER_LOG: log, CODEX_HOME: codexAuth });
+	const result = await cli([spec, '--out', out, '--docker', docker], { FAKE_AGENT_RECORD: record, FAKE_DOCKER_LOG: log, CODEX_HOME: codexAuth, FAKE_DOCKER_DENY: 'github.com:443' });
 	assert.equal(result.code, 0, result.stderr);
 	const calls = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-	const run = calls.find((call) => call.args[0] === 'run');
+	const run = calls.find((call) => call.args[0] === 'run' && call.args[1] !== '-d');
 	const args: string[] = run.args;
 	const after = (flag: string) => args.flatMap((value, index) => (args[index - 1] === flag ? [value] : []));
 	assert.deepEqual(after('-v').map((mount) => mount.slice(mount.lastIndexOf(':') + 1)), ['/work', '/home/agent']);
@@ -347,11 +347,25 @@ test('a container config runs the agent through docker: the clone and a private 
 	const name = after('--name')[0];
 	// The container goes right after the agent, before the diff and the check: the first call after `run` is `rm`.
 	assert.deepEqual(calls[calls.indexOf(run) + 1].args, ['rm', '--force', name]);
+	// The network: an internal network and a proxy that lets the hosts of codex through, ready before the agent starts.
+	const verbs = calls.map((call) => call.args.slice(0, 2).join(' '));
+	assert.deepEqual(verbs.slice(verbs.indexOf('network create'), verbs.indexOf('network create') + 4), ['network create', 'run -d', 'network connect', `logs ${name}-proxy`]);
+	assert.deepEqual(calls.find((call) => call.args[1] === 'create').args, ['network', 'create', '--internal', `${name}-net`]);
+	const proxy = calls.find((call) => call.args[1] === '-d').args;
+	assert.ok(proxy.includes('EVAL_PROXY_ALLOW=chatgpt.com,api.openai.com,auth.openai.com'));
+	assert.equal(after('--network')[0], `${name}-net`);
+	assert.ok(after('-e').includes('HTTPS_PROXY'));
+	assert.equal(run.passed.HTTPS_PROXY, 'http://eval-proxy:3128');
+	// After the agent: the proxy goes, then the network.
+	assert.ok(verbs.indexOf(`rm --force`) < verbs.lastIndexOf('network rm'));
+	assert.ok(calls.some((call) => call.args.join(' ') === `rm --force ${name}-proxy`));
 	const seen = JSON.parse(readFileSync(record, 'utf8'));
 	assert.deepEqual(seen.homeFiles, ['auth.json']);
 	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
 	assert.equal(saved.runs[0].status, 'ok');
 	assert.equal(saved.runs[0].acceptance.passed, true);
+	assert.deepEqual(saved.runs[0].blockedHosts, ['github.com:443']);
+	assert.match(readFileSync(join(evalDir(out), 'runs', 'codex-1', 'network.log'), 'utf8'), /"verdict":"deny"/);
 	assert.match(saved.cliVersion, /^eval-runner-agents:[0-9a-f]{12}$/);
 });
 

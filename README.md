@@ -189,6 +189,9 @@ Each run gets:
 
 - `docker run --rm --init --user <your uid>:<your gid> --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2`.
 - Two mounts and nothing else from the host: the clone at `/work`, and a new private home at `/home/agent` that holds only a copy of the `auth.json` of the agent.
+- A network filter. The agent container joins an `--internal` Docker network, with no route out. A proxy container (`container/proxy.ts`, from the same image) joins that network and the default one. It opens a `CONNECT` tunnel to port 443 of an allowed host, and refuses everything else: other hosts, other ports, IP addresses, plain HTTP. The agent gets `HTTPS_PROXY`. A CLI that ignores it gets no network at all.
+- The allowed hosts: the defaults of the agent in `container/allow.json` (codex: `chatgpt.com`, `api.openai.com`, `auth.openai.com`; opencode: `opencode.ai`, `models.opencode.ai`), and the `containerAllow` hosts of the config (a name, or `*.domain`). The npm registry is not in the defaults: the setup command installs the dependencies on the host.
+- `network.log` in the run folder: one JSON line per decision of the proxy. The record lists the refused targets in `blockedHosts`.
 - The variables of the agent, passed by name (`-e NAME`): no value shows in the argv or the process list. `containerEnv` adds host variables by name, for a login that the auth file does not hold.
 - Codex runs with `--sandbox danger-full-access`: the container is the boundary. Its own sandbox (bwrap) cannot create a namespace in an unprivileged container, and every command failed with it.
 - After the run, `docker rm --force <name>`: a killed `docker run` client leaves its container running.
@@ -197,7 +200,8 @@ A probe checked the boundary: in the container, `touch /escape-test` fails with 
 
 Limits:
 
-- The network stays open: the agent needs the API of its model. An allowlist (a proxy that lets only the model API through) is not done. For Codex, this is a step back: on the host, `workspace-write` gives its shell no network; in the container, its shell has the network. Prefer the host mode for Codex when the task needs no isolation from your files.
+- The filter reads the host name of the `CONNECT` request, not the TLS stream: domain fronting through an allowed host stays possible.
+- The gateway of the internal network is the Docker VM: from the agent container, a port that another container publishes (`docker run -p`) is reachable. Services of the Mac itself are not.
 - Claude Code does not run in the container: its login is in the macOS keychain. Use `sandbox: true` for Claude Code.
 - opencode keeps its valid key in its background service, and `auth.json` can hold an expired key (`401 This API key has expired` in the container). Export `OPENCODE_GO_API_KEY` on the host: the container then gets an `opencode.json` that reads the key from this variable, the variable by name, and no `auth.json`.
 - The acceptance command still runs on the host, in the clone.
