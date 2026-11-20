@@ -9,10 +9,10 @@ import { join, resolve } from 'node:path';
 import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
+import { runCheck } from './check.ts';
 import { setupFiles } from './command.ts';
 import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
-import { countTests } from './testcount.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
@@ -20,7 +20,7 @@ import { SpecError, loadSpec } from './spec.ts';
 import type { AgentName, Config, Spec } from './spec.ts';
 import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
-import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
+import { collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
 const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 
@@ -214,15 +214,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		writeFileSync(join(runDir, 'diff.patch'), patch);
 		record.diff = diff;
 
-		// The hidden tests enter after the diff, so they never count as agent work.
-		const hidden = spec.task.hiddenTests;
-		if (hidden) await placeHiddenTests(exec, { repo: spec.task.repo, commit: hidden.commit, paths: hidden.paths, dir: clone });
-
-		const checkStarted = Date.now();
-		const check = await exec('sh', ['-c', spec.task.acceptance.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.acceptance.timeoutSec * 1000 });
-		writeFileSync(join(runDir, 'acceptance.log'), (check.stdout + check.stderr).slice(-64 * 1024));
-		const tests = countTests(check.stdout + check.stderr);
-		record.acceptance = { exitCode: check.code, passed: check.code === 0 && !check.timedOut, timedOut: check.timedOut, durationMs: Date.now() - checkStarted, ...(tests ? { tests } : {}) };
+		record.acceptance = await runCheck(exec, spec.task, spec.dir, clone, runDir);
 	} catch (error) {
 		record.status = 'error';
 		record.note = (error as Error).message.slice(0, 300);

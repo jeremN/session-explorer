@@ -115,6 +115,16 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 
 A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, spec folder (`EVAL_SPEC_DIR`), hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
 
+### Check a run again
+
+`node eval-runner/recheck.ts <evalDir> [--runs <id>[,<id>]] [--spec <spec.json>]` runs the acceptance check again on the saved `diff.patch` of each run, without the agent. Use it when a check failed for a reason outside the agent (a port in use, a database that did not start), or when a hidden test was wrong.
+
+- Each run gets a new clone at the base, the setup command, its `diff.patch`, the hidden tests and the acceptance command. The applied diff must have the counts of the run (`record.diff`), or the run is not rechecked. The saved patch holds no binary content.
+- The record keeps the acceptance it replaced in `rechecked.previous`. The first log stays as `acceptance.original.log`.
+- `--spec` takes the acceptance command, the hidden tests and the category of that spec. It must name the same task (same repo, base and prompt). The cached copies of the rechecked runs then go: they belong to the old cache key. Without `--spec`, the cached copies get the new acceptance.
+
+`task.acceptance.infraExitCode` (2 to 255) names the exit code by which the acceptance command says that it failed before it judged the agent, for example a database that did not start. Such a run gets `acceptance.infra`, and the routing table leaves it out.
+
 ### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
 
 `npm run eval:diff -- <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10]` runs the task of the spec twice per round: `before` gets the file as it is at `HEAD`, `after` gets the working tree. Both start from the first config of the spec (or `--config`).

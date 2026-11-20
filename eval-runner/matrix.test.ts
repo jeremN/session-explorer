@@ -31,7 +31,7 @@ test('buildMatrix groups by category and route, skips cached copies, errors and 
 	// e2 reuses sonnet-1 of e1 from the cache: it counts once.
 	const second = evalOf('e2', 'Fix A.', undefined, CONFIGS, [run('sonnet-1', 'sonnet', true, 0.1, { cached: { evalId: 'e1', id: 'sonnet-1' } }), run('sonnet-2', 'sonnet', true, 0.3)]);
 	const matrix = buildMatrix([second, first]);
-	assert.deepEqual(matrix.excluded, { errors: 1, experiments: 1 });
+	assert.deepEqual(matrix.excluded, { errors: 1, infra: 0, experiments: 1 });
 	assert.equal(matrix.tasks.length, 1);
 	assert.equal(matrix.tasks[0].category, 'fast');
 	assert.equal(matrix.tasks[0].discriminating, true);
@@ -84,6 +84,11 @@ test('verdictOf: an agent that stopped partway or ran out of time failed; a run 
 	assert.equal(verdictOf(run('a', 'sonnet', true, undefined, { status: 'timeout' })), 'fail');
 	assert.equal(verdictOf(run('a', 'sonnet', true, undefined, { status: 'skipped' })), 'out');
 	assert.equal(verdictOf(run('a', 'sonnet', true)), 'pass');
+	// A check that failed before it judged the agent says nothing about the agent, unless the agent already failed.
+	const infra = { acceptance: { exitCode: 3, passed: false, timedOut: false, durationMs: 1, infra: true } };
+	assert.equal(verdictOf(run('a', 'sonnet', false, undefined, infra)), 'out');
+	assert.equal(verdictOf(run('a', 'sonnet', false, undefined, { ...infra, status: 'timeout' })), 'fail');
+	assert.deepEqual(buildMatrix([evalOf('e9', 'Fix Z.', 'strong', CONFIGS, [run('sonnet-1', 'sonnet', false, 0.1, infra)])]).excluded, { errors: 0, infra: 1, experiments: 0 });
 	const matrix = buildMatrix([evalOf('e1', 'Fix A.', 'strong', CONFIGS, [run('codex-1', 'codex', true, 0.1), run('codex-2', 'codex', true, 0.1, { status: 'timeout' }), run('codex-3', 'codex', true, undefined, { status: 'error', metrics: worked })])]);
 	assert.deepEqual(matrix.categories[0].routes.map((route) => [route.route, route.passed, route.n]), [['codex/gpt-x', 1, 3]]);
 	assert.equal(matrix.excluded.errors, 0);

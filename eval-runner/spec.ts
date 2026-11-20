@@ -41,7 +41,7 @@ export type Spec = {
 	name: string;
 	dir: string;
 	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
-	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number }; hiddenTests?: { commit: string; paths: string[] } };
+	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] } };
 	budget: { perRunUsd: number; perEvalUsd: number };
 	runs: number;
 	configs: Config[];
@@ -81,6 +81,13 @@ function setupOf(value: unknown) {
 	return { command: string(setup.command, 'spec.task.setup.command'), timeoutSec: optional(setup.timeoutSec, 'spec.task.setup.timeoutSec', (entry, field) => number(entry, field, 1)) ?? 600 };
 }
 
+// The exit code by which the acceptance command says that it failed before it judged the agent. 0 and 1 are taken.
+function infraExitCodeOf(value: unknown): { infraExitCode?: number } {
+	if (value === undefined || value === null) return {};
+	if (!Number.isInteger(value) || (value as number) < 2 || (value as number) > 255) fail('spec.task.acceptance.infraExitCode', 'an integer from 2 to 255');
+	return { infraExitCode: value as number };
+}
+
 export function validateSpec(raw: unknown, dir: string): Spec {
 	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs']);
 	const name = string(spec.name, 'spec.name');
@@ -90,7 +97,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
-	const acceptance = object(task.acceptance, 'spec.task.acceptance', ['command', 'timeoutSec']);
+	const acceptance = object(task.acceptance, 'spec.task.acceptance', ['command', 'timeoutSec', 'infraExitCode']);
 	let hiddenTests: { commit: string; paths: string[] } | undefined;
 	if (task.hiddenTests !== undefined && task.hiddenTests !== null) {
 		const hidden = object(task.hiddenTests, 'spec.task.hiddenTests', ['commit', 'paths']);
@@ -203,7 +210,8 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			...(task.setup === undefined || task.setup === null ? {} : { setup: setupOf(task.setup) }),
 			acceptance: {
 				command: string(acceptance.command, 'spec.task.acceptance.command'),
-				timeoutSec: optional(acceptance.timeoutSec, 'spec.task.acceptance.timeoutSec', (value, field) => number(value, field, 1)) ?? 300
+				timeoutSec: optional(acceptance.timeoutSec, 'spec.task.acceptance.timeoutSec', (value, field) => number(value, field, 1)) ?? 300,
+				...infraExitCodeOf(acceptance.infraExitCode)
 			},
 			...(hiddenTests === undefined ? {} : { hiddenTests })
 		},

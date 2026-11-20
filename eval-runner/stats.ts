@@ -24,7 +24,10 @@ export type RunRecord = {
 	status: Status;
 	sessionId?: string;
 	// `tests`: what the test runner of the check counted (see testcount.ts), when the check is a test run.
-	acceptance?: { exitCode: number | null; passed: boolean; timedOut: boolean; durationMs: number; tests?: TestCount };
+	// `infra`: the check exited with task.acceptance.infraExitCode, so it failed before it judged the agent.
+	acceptance?: { exitCode: number | null; passed: boolean; timedOut: boolean; durationMs: number; tests?: TestCount; infra?: boolean };
+	// recheck.ts ran the check again on the saved diff: when, and the acceptance it replaced.
+	rechecked?: { at: string; previous?: RunRecord['acceptance'] };
 	wallSec?: number;
 	cliCostUsd?: number | null;
 	diff?: { files: number; added: number; deleted: number };

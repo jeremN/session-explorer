@@ -86,6 +86,8 @@ test('other fields are checked: slug, runs range, config count, acceptance, unkn
 	failure({ ...base(), runs: 0 }, 'spec.runs');
 	failure({ ...base(), configs: [] }, 'spec.configs');
 	failure({ ...base(), task: { ...base().task, acceptance: {} } }, 'spec.task.acceptance.command');
+	assert.equal(validateSpec({ ...base(), task: { ...base().task, acceptance: { command: 'true', infraExitCode: 3 } } }, '/s').task.acceptance.infraExitCode, 3);
+	for (const code of [0, 1, 256, 2.5, '3']) failure({ ...base(), task: { ...base().task, acceptance: { command: 'true', infraExitCode: code } } }, 'spec.task.acceptance.infraExitCode');
 	failure({ ...base(), configs: [{ name: 'a', modle: 'x' }] }, 'spec.configs[0].modle');
 	failure({ ...base(), configs: [{ name: 'a', bare: 'yes' }] }, 'spec.configs[0].bare');
 	failure({ ...base(), budget: { perRunUsd: 0, perEvalUsd: 6 } }, 'spec.budget.perRunUsd');
