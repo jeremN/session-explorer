@@ -38,6 +38,8 @@ export function verdictOf(run: RunRecord): 'out' | 'pass' | 'fail' {
 	if (run.status === 'skipped') return 'out';
 	if (run.status === 'error') return (run.metrics?.billedTokens ?? 0) > 0 ? 'fail' : 'out';
 	if (run.status === 'timeout') return 'fail';
+	// The check failed before it judged the agent: the run says nothing about it.
+	if (run.acceptance?.infra) return 'out';
 	return run.acceptance?.passed ? 'pass' : 'fail';
 }
 
@@ -48,6 +50,7 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 	// Runs per category and route, for the medians.
 	const samples = new Map<string, { passed: number; n: number; costs: number[]; walls: number[]; shares: Map<string, number[]>; tasks: Set<string> }>();
 	let errors = 0;
+	let infra = 0;
 	let experiments = 0;
 	for (const ev of [...evals].sort((a, b) => a.id.localeCompare(b.id))) {
 		const key = taskKey(ev);
@@ -68,7 +71,8 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 			}
 			const verdict = verdictOf(run);
 			if (verdict === 'out') {
-				errors++;
+				if (run.acceptance?.infra) infra++;
+				else errors++;
 				continue;
 			}
 			const route = routeOf(config);
@@ -124,7 +128,7 @@ export function buildMatrix(evals: SavedEval[], matrixRoutes: Record<string, str
 		const discriminating = own.filter((task) => task.discriminating).length;
 		return { category, routes, tasks: own.length, discriminating, proposal: propose(routes, discriminating), ...(matrixRoutes[category] ? { matrix: matrixRoutes[category] } : {}) };
 	});
-	return { categories: rows, tasks: [...tasks.values()], excluded: { errors, experiments } };
+	return { categories: rows, tasks: [...tasks.values()], excluded: { errors, infra, experiments } };
 }
 
 // The route of a category: the cheapest route whose pass rate is within one run of the best.
@@ -164,7 +168,7 @@ export function renderMarkdown(matrix: ReturnType<typeof buildMatrix>) {
 	}
 	const flat = matrix.tasks.filter((task) => !task.discriminating && Object.keys(task.routes).length >= 2);
 	if (flat.length) lines.push('## Tasks that tell no route apart', '', ...flat.map((task) => `- ${task.name} (${task.category}): ${Object.entries(task.routes).map(([route, cell]) => `${route} ${cell.passed}/${cell.n}`).join(', ')}`), '');
-	lines.push(`Left out: ${matrix.excluded.errors} run(s) where the agent never worked (status error, no billed token), ${matrix.excluded.experiments} run(s) of configs that change the instructions.`);
+	lines.push(`Left out: ${matrix.excluded.errors} run(s) where the agent never worked (status error, no billed token), ${matrix.excluded.infra} run(s) whose check failed before it judged the agent, ${matrix.excluded.experiments} run(s) of configs that change the instructions.`);
 	return `${lines.join('\n')}\n`;
 }
 
