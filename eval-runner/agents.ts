@@ -137,8 +137,17 @@ export function codexOutcome(stdout: string, { model, prompt, start, price }: { 
 // into the source repository. The empty XDG_CONFIG_HOME keeps the user config (MCP servers, plugins) out, and
 // OPENCODE_DISABLE_CLAUDE_CODE keeps out ~/.claude/CLAUDE.md and the Claude Code skills, which opencode reads by default.
 // In a container, the home is empty already: no XDG_CONFIG_HOME (`configHome` undefined).
-export function opencodeInvocation(config: Config, configHome: string | undefined, prompt: string, dir: string): Invocation {
-	const args = ['run', '--format', 'json', '--auto', '--pure', '--dir', dir];
+// The major version in the output of `opencode --version` ("1.19.6", "opencode v2.3.2"). 1 when it cannot be read.
+export function opencodeMajor(version: string | undefined) {
+	const match = /(\d+)\.\d+/.exec(version ?? '');
+	return match ? Number(match[1]) : 1;
+}
+
+// opencode 1 works in the folder of --dir, and --pure loads no external plugin. opencode 2 has neither option: it works
+// in its cwd (the runner sets it, and PWD, to the clone), and the private config folder holds no plugin. Without
+// --standalone, opencode 2 sends the run to a shared background service that another config folder may have started.
+export function opencodeInvocation(config: Config, configHome: string | undefined, prompt: string, dir: string, version?: string): Invocation {
+	const args = opencodeMajor(version) >= 2 ? ['--standalone', 'run', '--format', 'json', '--auto'] : ['run', '--format', 'json', '--auto', '--pure', '--dir', dir];
 	if (config.model) args.push('--model', config.model);
 	args.push('--', prompt);
 	return { args, files: [], env: { ...AGENT_ENV, ...(configHome ? { XDG_CONFIG_HOME: configHome } : {}), OPENCODE_DISABLE_CLAUDE_CODE: '1' }, input: '' };
@@ -158,6 +167,7 @@ export function opencodeOutcome(stdout: string, { model, prompt, start }: { mode
 	const name = model ?? NO_MODEL.opencode;
 	const rows: unknown[] = [{ type: 'user', timestamp: at(), message: { role: 'user', content: prompt } }];
 	let costUsd: number | null = null;
+	let billed = 0;
 	let failure: string | undefined;
 	let finished = false;
 	for (const event of jsonLines(stdout)) {
@@ -166,7 +176,9 @@ export function opencodeOutcome(stdout: string, { model, prompt, start }: { mode
 		if (event.type === 'tool_use') {
 			const state = part.state ?? {};
 			const input = { ...(state.input ?? {}) };
-			if (typeof input.filePath === 'string') input.file_path = input.filePath;
+			// opencode 1 names the file `filePath`, opencode 2 names it `path`.
+			const file = input.filePath ?? input.path;
+			if (typeof file === 'string') input.file_path = file;
 			const tool = String(part.tool ?? 'unknown');
 			const exit = state.metadata?.exit;
 			const failed = state.status === 'error' || (typeof exit === 'number' && exit !== 0);
@@ -177,12 +189,15 @@ export function opencodeOutcome(stdout: string, { model, prompt, start }: { mode
 			const tokens = part.tokens ?? {};
 			const usage = { input_tokens: Number(tokens.input ?? 0), cache_read_input_tokens: Number(tokens.cache?.read ?? 0), cache_creation_input_tokens: Number(tokens.cache?.write ?? 0), output_tokens: Number(tokens.output ?? 0) + Number(tokens.reasoning ?? 0) };
 			rows.push({ type: 'assistant', timestamp: t(), message: { id: String(part.id), role: 'assistant', model: name, usage, content: [] } });
+			billed += usage.input_tokens + usage.output_tokens;
 			if (typeof part.cost === 'number' && Number.isFinite(part.cost)) costUsd = (costUsd ?? 0) + part.cost;
 			if (part.reason === 'stop') finished = true;
 		} else if (event.type === 'error') {
 			failure = String(event.error?.data?.message ?? event.error?.message ?? event.error?.name ?? 'error');
 		}
 	}
-	const note = failure ?? (finished ? undefined : 'opencode never finished a step with reason stop');
-	return { costUsd, isError: Boolean(failure) || !finished, budget: false, entries: rows, note };
+	// opencode 2 reports a cost of 0 for an opencode-go model, though the steps bill tokens: the cost is unknown, not 0.
+	const unpriced = costUsd === 0 && billed > 0;
+	const note = failure ?? (finished ? (unpriced ? 'opencode reported a cost of 0 for billed tokens: the cost is unknown' : undefined) : 'opencode never finished a step with reason stop');
+	return { costUsd: unpriced ? null : costUsd, isError: Boolean(failure) || !finished, budget: false, entries: rows, note };
 }

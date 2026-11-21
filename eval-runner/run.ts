@@ -102,13 +102,13 @@ const networkFor = (config: Config, name: string): Network => networkOf(name, al
 // How to start the agent of a config. `home` is the private config folder of codex or opencode (on the host, or the
 // home mounted in the container). PWD names the clone too: a CLI that reads PWD instead of its cwd (opencode does)
 // must never see the folder of the runner.
-function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string }, prompt: string, where: Where, options: Options): Started {
+function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string; opencodeVersion?: string }, prompt: string, where: Where, options: Options): Started {
 	if (config.container) {
 		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
 		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? OPENCODE_KEY_ENVS : [])] }, options.docker);
 	}
 	const agent = config.agent ?? 'claude';
-	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone) : claudeInvocation(config, context, prompt);
+	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone, context.opencodeVersion) : claudeInvocation(config, context, prompt);
 	return { ...invocation, command: options.bin[agent], env: { ...invocation.env, PWD: where.clone } };
 }
 
@@ -118,10 +118,10 @@ function outcomeOf(config: Config, stdout: string, prompt: string, start: number
 	return claudeOutcome(stdout);
 }
 
-type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string };
+type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string; opencodeVersion?: string };
 type RunOutcome = { record: RunRecord; failed: boolean };
 
-async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: RunContext, planned: Planned): Promise<RunOutcome> {
+async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion }: RunContext, planned: Planned): Promise<RunOutcome> {
 	const sessionId = randomUUID();
 	const name = containerName(evalId, planned.id);
 	const runDir = join(evalDir, 'runs', planned.id);
@@ -150,7 +150,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image }: 
 		const prompt = spec.task.prompt ?? '';
 		if (planned.config.container) home = containerHome(planned.config.agent!);
 		else home = agentName === 'codex' ? codexHome() : agentName === 'opencode' ? opencodeConfigHome() : undefined;
-		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir }, prompt, { home: home ?? '', clone, image, name }, options);
+		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir, opencodeVersion }, prompt, { home: home ?? '', clone, image, name }, options);
 		for (const file of invocation.files) writeFileSync(file.path, file.content);
 		if (planned.config.container) {
 			network = networkFor(planned.config, name);
@@ -310,7 +310,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	for (const run of planned) {
 		const agent = run.config.agent ?? 'claude';
 		const clone = join(tmpdir(), 'eval-runner', evalId, run.id);
-		const { command, args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id) }, '<prompt>', { home: '<home>', clone, image, name: containerName(evalId, run.id) }, options);
+		const { command, args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id), opencodeVersion: versions.opencode }, '<prompt>', { home: '<home>', clone, image, name: containerName(evalId, run.id) }, options);
 		console.log(`${run.id} config=${run.config.name} agent=${agent}${run.config.container ? ` (container, allow ${networkFor(run.config, '').allow.join(',')})` : ''} model=${run.config.model ?? 'default'} clone=${clone} argv: ${command} ${args.join(' ')}`);
 	}
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
@@ -318,7 +318,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	mkdirSync(join(evalDir, 'runs'), { recursive: true });
-	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image };
+	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion: versions.opencode };
 	const runs: RunRecord[] = [...reused];
 	let spent = 0;
 	let anyFailed = false;
