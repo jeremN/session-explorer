@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { codexHome, codexInvocation, codexOutcome, opencodeInvocation, opencodeOutcome, unwrapShell } from './agents.ts';
+import { codexHome, codexInvocation, codexOutcome, opencodeInvocation, opencodeMajor, opencodeOutcome, unwrapShell } from './agents.ts';
 import { scoreRun } from './score.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'eval-agents-'));
@@ -42,6 +42,11 @@ test('the codex and opencode argv: sandbox, no user config, the model, and the p
 	// opencode works in $PWD unless --dir names the folder.
 	assert.deepEqual(opencode.args, ['run', '--format', 'json', '--auto', '--pure', '--dir', '/clone', '--', '--danger']);
 	assert.deepEqual([opencode.env.XDG_CONFIG_HOME, opencode.env.OPENCODE_DISABLE_CLAUDE_CODE], ['/x', '1']);
+	// opencode 2 refuses --pure and --dir: it works in its cwd, on a private server.
+	const v2 = opencodeInvocation({ name: 'b', agent: 'opencode', sandbox: false, model: 'm/x' }, '/x', 'Fix it.', '/clone', 'opencode v2.3.2');
+	assert.deepEqual(v2.args, ['--standalone', 'run', '--format', 'json', '--auto', '--model', 'm/x', '--', 'Fix it.']);
+	assert.deepEqual(opencodeInvocation({ name: 'b', agent: 'opencode', sandbox: false }, '/x', 'p', '/clone', '1.19.6').args.slice(4, 7), ['--pure', '--dir', '/clone']);
+	assert.deepEqual([opencodeMajor('opencode v2.3.2'), opencodeMajor('1.19.6'), opencodeMajor('unknown'), opencodeMajor(undefined)], [2, 1, 1, 1]);
 });
 
 const codexEvents = [
@@ -95,6 +100,17 @@ test('opencodeOutcome: the cost is the sum of the steps, and a shell exit code o
 	assert.equal(scored.metrics.verified, 1);
 	// Fresh input and output, reasoning included. The cache reads are not billed tokens.
 	assert.equal(scored.metrics.billedTokens, 1000 + 60 + 100 + 5);
+});
+
+test('opencodeOutcome: opencode 2 names the file `path`, and a cost of 0 for billed tokens is an unknown cost', () => {
+	const v2 = opencodeEvents.map((event) => (event.type === 'step_finish' ? { ...event, part: { ...event.part, cost: 0 } } : event));
+	v2.splice(1, 0, { type: 'tool_use', timestamp: START + 500, part: { id: 'p9', callID: 'c9', tool: 'write', state: { status: 'completed', input: { path: '/clone/b.txt', content: 'ok' }, output: '' } } } as (typeof opencodeEvents)[number]);
+	const outcome = opencodeOutcome(lines(v2), { prompt: 'x', start: START });
+	assert.equal(outcome.costUsd, null);
+	assert.match(outcome.note ?? '', /cost of 0 for billed tokens/);
+	assert.equal(outcome.isError, false);
+	const write = outcome.entries.flatMap((row) => ((row as { message?: { content?: unknown[] } }).message?.content ?? []) as { name?: string; input?: { file_path?: string } }[]).filter((part) => part.name === 'Write');
+	assert.ok(write.some((part) => part.input?.file_path === '/clone/b.txt'));
 });
 
 test('opencodeOutcome: an error event, or no step with reason stop, is an error', () => {
