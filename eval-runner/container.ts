@@ -83,6 +83,19 @@ export async function imageExists(exec: Exec, tag: string, docker = 'docker') {
 	return (await exec(docker, ['image', 'inspect', '--format', '{{.Id}}', tag])).code === 0;
 }
 
+// Why the image is not usable: the daemon does not answer (stopped, or another docker context), or the image is not
+// built. Both made `docker image inspect` fail, and the runner said "missing" for the two.
+export async function imageProblem(exec: Exec, tag: string, docker = 'docker'): Promise<string | undefined> {
+	if (await imageExists(exec, tag, docker)) return undefined;
+	const server = await exec(docker, ['version', '--format', '{{.Server.Version}}']);
+	if (server.code !== 0 || !server.stdout.trim()) {
+		const context = (await exec(docker, ['context', 'show'])).stdout.trim();
+		const reason = (server.stderr.trim().split('\n').pop() ?? '').slice(0, 200);
+		return `Docker does not answer${context ? ` (context ${context})` : ''}: ${reason || `exit code ${server.code}`}. Start it, or pick the context that holds the image: docker context use <name>, or DOCKER_CONTEXT=<name>.`;
+	}
+	return `The image ${tag} is missing. Build it with: npm run eval:image`;
+}
+
 // opencode keeps its valid key in its background service, and its auth.json can still hold an expired key. When this
 // host variable is set, opencode in the container reads its key from it, and the container gets no auth.json. Both
 // names are accepted; the first that is set wins.

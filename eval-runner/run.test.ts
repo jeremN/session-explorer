@@ -328,6 +328,10 @@ test('a container config runs the agent through docker: the clone and a private 
 	const missing = await cli([spec, '--out', out, '--docker', docker], { FAKE_DOCKER_NO_IMAGE: '1' });
 	assert.equal(missing.code, 2);
 	assert.match(missing.stderr, /npm run eval:image/);
+	const down = await cli([spec, '--out', out, '--docker', docker], { FAKE_DOCKER_DOWN: '1' });
+	assert.equal(down.code, 2);
+	assert.match(down.stderr, /Docker does not answer \(context fake-context\): failed to connect to the docker API/);
+	assert.doesNotMatch(down.stderr, /is missing/);
 
 	const result = await cli([spec, '--out', out, '--docker', docker], { FAKE_AGENT_RECORD: record, FAKE_DOCKER_LOG: log, CODEX_HOME: codexAuth, FAKE_DOCKER_DENY: 'github.com:443' });
 	assert.equal(result.code, 0, result.stderr);

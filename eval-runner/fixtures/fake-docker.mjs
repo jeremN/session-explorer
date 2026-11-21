@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A fake `docker` for the tests. `run` starts the fake agent of the same name in the folder mounted at /work, with only
 // the variables named by `-e`, and HOME set to the folder mounted at /home/agent. `image inspect` succeeds unless
-// FAKE_DOCKER_NO_IMAGE is set. FAKE_DOCKER_LOG names a file where every call appends its argv as one JSON line.
+// FAKE_DOCKER_NO_IMAGE is set. With FAKE_DOCKER_DOWN, the daemon does not answer: `image` and `version` fail. FAKE_DOCKER_LOG names a file where every call appends its argv as one JSON line.
 // The network calls succeed: `network`, a detached `run -d` (the proxy), `inspect` (the proxy runs), and `logs` (the
 // proxy listens, and refuses FAKE_DOCKER_DENY when it is set).
 import { spawn } from 'node:child_process';
@@ -10,6 +10,18 @@ import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 if (process.env.FAKE_DOCKER_LOG) appendFileSync(process.env.FAKE_DOCKER_LOG, `${JSON.stringify({ args, passed: args[0] === 'run' ? Object.fromEntries(args.flatMap((value, index) => (args[index - 1] === '-e' ? [[value, process.env[value]]] : []))) : undefined })}\n`);
+if (process.env.FAKE_DOCKER_DOWN && (args[0] === 'image' || args[0] === 'version')) {
+	console.error('failed to connect to the docker API at unix:///fake.sock');
+	process.exit(1);
+}
+if (args[0] === 'context') {
+	console.log('fake-context');
+	process.exit(0);
+}
+if (args[0] === 'version') {
+	console.log('29.0.0');
+	process.exit(0);
+}
 if (args[0] === 'image') process.exit(process.env.FAKE_DOCKER_NO_IMAGE ? 1 : 0);
 if (args[0] === 'rm' || args[0] === 'network') process.exit(0);
 if (args[0] === 'inspect') {

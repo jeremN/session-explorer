@@ -11,7 +11,7 @@ import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutco
 import type { Invocation, Outcome } from './agents.ts';
 import { runCheck } from './check.ts';
 import { setupFiles } from './command.ts';
-import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageExists, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
+import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageProblem, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
@@ -293,8 +293,9 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const versionOf = (config: Config) => (config.container ? image : versions[config.agent ?? 'claude']!);
 	const parts = [...agents.map((agent) => `${agent} ${versions[agent]}`), ...(containers ? [image] : [])];
 	const cliVersion = agents.length === 1 && agents[0] === 'claude' && !containers ? versions.claude! : parts.join(', ');
-	if (containers && !options.dryRun && !(await imageExists(exec, image, options.docker))) {
-		console.error(`The image ${image} is missing. Build it with: npm run eval:image`);
+	const problem = containers && !options.dryRun ? await imageProblem(exec, image, options.docker) : undefined;
+	if (problem) {
+		console.error(problem);
 		return { code: 2 };
 	}
 	const cacheDir = join(options.out, 'cache');
