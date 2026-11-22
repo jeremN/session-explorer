@@ -150,7 +150,11 @@ The list is `eval-runner/out/watch.json` (gitignored, `--watch` names another). 
 - `file`: a CLAUDE.md, an AGENTS.md or a skill directory. `~` is your home. A relative path starts from the folder of the list, as `spec` does.
 - `config`, `runs` (default 3) and `maxRuns` (default 10) go to `eval:diff`. The most a measure costs is both sides at `maxRuns` runs, at the `perRunUsd` of the spec.
 - `--run` measures each change with `eval:diff --before <copy>`. Then the new version becomes the copy, with the verdict. A measure that does not finish keeps the old copy. A file that was never measured gets its first copy, with no measure and no spend. `--only <name>` limits the run to the names that the list prints.
-- `--status-line` prints one line when a watched file changed, and nothing otherwise, never an error. It is made for a `SessionStart` hook: `node <repo>/eval-runner/watch.ts --status-line`.
+- `--status-line` prints one line when a watched file changed, and nothing otherwise, never an error. It is made for a `SessionStart` hook. The plain output of a `SessionStart` hook goes to the model, not to you: wrap the line in a `systemMessage` to see it.
+
+  ```json
+  { "matcher": "startup|resume", "hooks": [{ "type": "command", "timeout": 10, "command": "node <repo>/eval-runner/watch.ts --status-line 2>/dev/null | jq -Rsc 'select(length > 0) | {systemMessage: rtrimstr(\"\\n\")}' 2>/dev/null || true" }] }
+  ```
 - The copies and the verdicts are in `eval-runner/out/watch/`.
 - A measure says something only when the task needs the skill. For a skill, the report lists how many times the skill loaded in each run.
 
