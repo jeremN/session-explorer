@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { compare, diffConfigs, headVersion, main } from './diff.ts';
+import { compare, diffConfigs, headVersion, main, savedVersion } from './diff.ts';
 import { realExec } from './exec.ts';
 import type { ConfigStats } from './stats.ts';
 
@@ -111,5 +111,20 @@ test('eval diff runs before and after on the spec, writes diff.json, and stops a
 		assert.deepEqual(report.file, realpathSync(join(repo, 'CLAUDE.md')));
 	} finally {
 		process.env.EVAL_RUNNER_PROJECTS_DIR = previous.projects;
+	}
+});
+
+test('savedVersion: a saved copy replaces HEAD, for a file outside git; a skill copy keeps the name of the skill', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'eval-diff-saved-'));
+	try {
+		writeFileSync(join(dir, 'CLAUDE.md'), 'new\n');
+		writeFileSync(join(dir, 'before.md'), 'old\n');
+		assert.deepEqual(savedVersion(join(dir, 'CLAUDE.md'), join(dir, 'before.md')), { kind: 'claudeMd', path: realpathSync(join(dir, 'CLAUDE.md')), head: 'old\n' });
+		for (const path of [join(dir, 'skills', 'tidy'), join(dir, 'saved', 'tidy'), join(dir, 'saved', 'other')]) mkdirSync(path, { recursive: true });
+		assert.equal(savedVersion(join(dir, 'skills', 'tidy'), join(dir, 'saved', 'tidy')).head, realpathSync(join(dir, 'saved', 'tidy')));
+		assert.throws(() => savedVersion(join(dir, 'skills', 'tidy'), join(dir, 'saved', 'other')), /must be named tidy/);
+		assert.throws(() => savedVersion(join(dir, 'skills', 'tidy'), join(dir, 'before.md')), /must be a directory/);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 });
