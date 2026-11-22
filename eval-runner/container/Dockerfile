@@ -3,7 +3,9 @@
 FROM node:24.22.1-trixie
 ARG CODEX_VERSION=0.166.0
 ARG OPENCODE_VERSION=1.19.6
-RUN npm install -g --no-fund --no-audit "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
+# pnpm for the tasks of a pnpm repo: the proxy lets no package registry through, so corepack cannot fetch it.
+ARG PNPM_VERSION=11.8.0
+RUN npm install -g --no-fund --no-audit "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}" "pnpm@${PNPM_VERSION}" \
 	&& npm cache clean --force \
 	&& apt-get update && apt-get install -y --no-install-recommends ripgrep && rm -rf /var/lib/apt/lists/*
 # The network filter of the run. It runs in its own container from this image: see proxy.ts.

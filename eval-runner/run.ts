@@ -10,6 +10,8 @@ import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
 import type { Invocation, Outcome } from './agents.ts';
 import { runCheck } from './check.ts';
+import { startServices, stopServices } from './services.ts';
+import type { Services } from './services.ts';
 import { setupFiles } from './command.ts';
 import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageProblem, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
@@ -102,14 +104,16 @@ const networkFor = (config: Config, name: string): Network => networkOf(name, al
 // How to start the agent of a config. `home` is the private config folder of codex or opencode (on the host, or the
 // home mounted in the container). PWD names the clone too: a CLI that reads PWD instead of its cwd (opencode does)
 // must never see the folder of the runner.
-function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string; opencodeVersion?: string }, prompt: string, where: Where, options: Options): Started {
+function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string; opencodeVersion?: string; serviceEnv?: Record<string, string>; serviceNames?: string[] }, prompt: string, where: Where, options: Options): Started {
+	const serviceEnv = context.serviceEnv ?? {};
 	if (config.container) {
-		const inner = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
-		return containerize(inner, config.agent!, { image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? OPENCODE_KEY_ENVS : [])] }, options.docker);
+		const bare = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
+		const inner = { ...bare, env: { ...bare.env, ...serviceEnv } };
+		return containerize(inner, config.agent!, { noProxy: context.serviceNames, image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? OPENCODE_KEY_ENVS : [])] }, options.docker);
 	}
 	const agent = config.agent ?? 'claude';
 	const invocation = agent === 'codex' ? codexInvocation(config, where.home, prompt) : agent === 'opencode' ? opencodeInvocation(config, where.home, prompt, where.clone, context.opencodeVersion) : claudeInvocation(config, context, prompt);
-	return { ...invocation, command: options.bin[agent], env: { ...invocation.env, PWD: where.clone } };
+	return { ...invocation, command: options.bin[agent], env: { ...invocation.env, ...serviceEnv, PWD: where.clone } };
 }
 
 function outcomeOf(config: Config, stdout: string, prompt: string, start: number): Outcome {
@@ -132,6 +136,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 	let home: string | undefined;
 	let network: Network | undefined;
 	let proxyDied = false;
+	const services: Services = { env: {}, containers: [] };
 	mkdirSync(runDir, { recursive: true });
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
@@ -150,18 +155,22 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		const prompt = spec.task.prompt ?? '';
 		if (planned.config.container) home = containerHome(planned.config.agent!);
 		else home = agentName === 'codex' ? codexHome() : agentName === 'opencode' ? opencodeConfigHome() : undefined;
-		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir, opencodeVersion }, prompt, { home: home ?? '', clone, image, name }, options);
-		for (const file of invocation.files) writeFileSync(file.path, file.content);
 		if (planned.config.container) {
 			network = networkFor(planned.config, name);
 			await startNetwork(exec, network, image, USER, options.docker);
 		}
+		// The services start after the setup and the network, and before the agent.
+		if (spec.task.services) await startServices(exec, spec.task.services, { name, network: network?.network, docker: options.docker }, services);
+		const invocation = invocationOf(planned.config, { sessionId, perRunUsd: spec.budget.perRunUsd, runDir, opencodeVersion, serviceEnv: services.env, serviceNames: spec.task.services?.map((service) => service.name) }, prompt, { home: home ?? '', clone, image, name }, options);
+		for (const file of invocation.files) writeFileSync(file.path, file.content);
 
 		const started = Date.now();
 		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
 		// After a timeout the container still runs: it must be gone before the diff and the acceptance command.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
+		// The services go before the diff and the check, and before the network: a network with a container stays.
+		await stopServices(exec, services, options.docker);
 		if (network) {
 			const { log, proxyStopped } = await stopNetwork(exec, network, options.docker);
 			writeFileSync(join(runDir, 'network.log'), log);
@@ -224,6 +233,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		if (gitDir) await removeWorkspace(gitDir);
 		// Backstop: an error between the start and the first removal.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
+		await stopServices(exec, services, options.docker);
 		if (network) await stopNetwork(exec, network, options.docker);
 		if (home) await removeWorkspace(home);
 		if (!options.keep) await removeWorkspace(clone);

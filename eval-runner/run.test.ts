@@ -373,6 +373,47 @@ test('a container config runs the agent through docker: the clone and a private 
 	assert.match(saved.cliVersion, /^eval-runner-agents:[0-9a-f]{12}$/);
 });
 
+test('task.services: a database for the agent, on 127.0.0.1 for a host agent and on the run network for a container agent', async () => {
+	const docker = join(import.meta.dirname, 'fixtures', 'fake-docker.mjs');
+	const services = [{ name: 'db', image: 'postgres:17', port: 5432, ready: ['pg_isready'], agentEnv: { TEST_DATABASE_URL: 'postgres://u:p@${host}:${port}/t' } }];
+	const task = { repo, prompt: 'Make the change.', timeoutSec: 60, acceptance: { command: 'grep -q "agent was here" agent-output.txt' }, services };
+	const verbsOf = (log: string) => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { args: string[]; passed?: Record<string, string> });
+
+	// Host: Docker publishes the port on 127.0.0.1, and the agent gets the port it picked.
+	const hostLog = join(root, 'docker-services-host.log');
+	const argvFile = join(root, 'argv-services.json');
+	const host = await cli([writeSpec('services-host', { runs: 1, task }), '--claude', FAKE, '--docker', docker, '--out', join(root, 'out-services-host'), '--only', 'baseline'], { FAKE_CLAUDE_ARGV: argvFile, FAKE_DOCKER_LOG: hostLog });
+	assert.equal(host.code, 0, host.stderr);
+	assert.equal(JSON.parse(readFileSync(argvFile, 'utf8')).fullEnv.TEST_DATABASE_URL, 'postgres://u:p@127.0.0.1:55012/t');
+	const hostCalls = verbsOf(hostLog);
+	const started = hostCalls.find((call) => call.args[0] === 'run' && call.args[1] === '-d')!.args;
+	assert.equal(started[started.indexOf('-p') + 1], '127.0.0.1::5432');
+	assert.ok(hostCalls.some((call) => call.args[0] === 'rm' && call.args[2]?.endsWith('-svc-db')));
+
+	// Container: the service joins the run network under its name; the agent reaches it without the proxy.
+	const log = join(root, 'docker-services.log');
+	const codexAuth = join(root, 'codex-auth-services');
+	mkdirSync(codexAuth);
+	writeFileSync(join(codexAuth, 'auth.json'), '{}');
+	const spec = writeSpec('services-container', { runs: 1, task, configs: [{ name: 'codex', agent: 'codex', model: 'gpt-x', container: true, containerEnv: ['FAKE_AGENT_RECORD'], price: { input: 1, output: 10, cacheRead: 0.1 } }] });
+	const result = await cli([spec, '--out', join(root, 'out-services'), '--docker', docker], { FAKE_AGENT_RECORD: join(root, 'services-record.json'), FAKE_DOCKER_LOG: log, CODEX_HOME: codexAuth });
+	assert.equal(result.code, 0, result.stderr);
+	const calls = verbsOf(log);
+	const agent = calls.find((call) => call.args[0] === 'run' && call.args[1] !== '-d')!;
+	const network = agent.args[agent.args.indexOf('--network') + 1];
+	assert.equal(agent.passed!.TEST_DATABASE_URL, 'postgres://u:p@db:5432/t');
+	assert.equal(agent.passed!.NO_PROXY, 'localhost,127.0.0.1,db');
+	const service = calls.find((call) => call.args[0] === 'run' && call.args.includes('postgres:17'))!.args;
+	assert.deepEqual(service.slice(service.indexOf('--network'), service.indexOf('--network') + 4), ['--network', network, '--network-alias', 'db']);
+	assert.ok(!service.includes('-p'));
+	// The service starts after the network and before the agent, and goes before the network.
+	const index = (match: (args: string[]) => boolean) => calls.findIndex((call) => match(call.args));
+	const removed = index((args) => args[0] === 'rm' && args[2]?.endsWith('-svc-db'));
+	assert.ok(index((args) => args[1] === 'create') < index((args) => args.includes('postgres:17')));
+	assert.ok(index((args) => args.includes('postgres:17')) < calls.indexOf(agent));
+	assert.ok(calls.indexOf(agent) < removed && removed < index((args) => args.join(' ') === `network rm ${network}`));
+});
+
 test('task.setup runs in the clone before the agent, stays out of the diff when ignored, and a failed setup is an error', async () => {
 	const out = join(root, 'out-setup');
 	// The runner diffs with its own copy of the git dir, without info/exclude: only a committed .gitignore hides a file.
