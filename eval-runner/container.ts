@@ -121,7 +121,7 @@ export function containerHome(agent: Exclude<AgentName, 'claude'>, source = { co
 	return home;
 }
 
-export type ContainerRun = { image: string; name: string; clone: string; home: string; user: string; passEnv?: string[]; network?: Network };
+export type ContainerRun = { image: string; name: string; clone: string; home: string; user: string; passEnv?: string[]; network?: Network; noProxy?: string[] };
 
 // The `docker run` argv around the invocation of the agent. Every variable goes as `-e NAME`: docker reads the value
 // from its own environment, so no value shows in the argv or the process list.
@@ -131,7 +131,9 @@ export function containerize(invocation: Invocation, command: string, run: Conta
 	// The CLIs reach their API through the proxy. A CLI that ignores these variables gets no network at all.
 	if (run.network) {
 		const proxy = `http://${PROXY_ALIAS}:${PROXY_PORT}`;
-		Object.assign(env, { HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: 'localhost,127.0.0.1', no_proxy: 'localhost,127.0.0.1' });
+		// The services of the run (task.services) are on the run network: the agent reaches them directly, not through the proxy.
+		const noProxy = ['localhost', '127.0.0.1', ...(run.noProxy ?? [])].join(',');
+		Object.assign(env, { HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: noProxy, no_proxy: noProxy });
 	}
 	const args = ['run', '--rm', '--init', '-i', '--name', run.name, '--user', run.user, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '4g', '--cpus', '2'];
 	// The embedded DNS of Docker still resolves the proxy alias. --dns sets where it forwards the other names: to an

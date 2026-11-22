@@ -24,6 +24,12 @@ if (args[0] === 'version') {
 }
 if (args[0] === 'image') process.exit(process.env.FAKE_DOCKER_NO_IMAGE ? 1 : 0);
 if (args[0] === 'rm' || args[0] === 'network') process.exit(0);
+// A service (task.services): `port` prints the published address, `exec` runs its ready command. FAKE_DOCKER_SERVICE_DOWN: never ready.
+if (args[0] === 'port') {
+	console.log('127.0.0.1:55012');
+	process.exit(0);
+}
+if (args[0] === 'exec') process.exit(process.env.FAKE_DOCKER_SERVICE_DOWN ? 1 : 0);
 if (args[0] === 'inspect') {
 	console.log('true');
 	process.exit(0);

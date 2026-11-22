@@ -220,7 +220,32 @@ Gemini CLI is not supported: a personal Google account gets `IneligibleTierError
 
 ### Setup command
 
-`task.setup` (`{ "command", "timeoutSec" }`, default 600 s) runs in the clone after the setup commit and before the agent, for example `pnpm install --frozen-lockfile`. Its output goes to `setup.log`. A failed setup makes the run an error. The diff uses the git dir of the runner, which has no `info/exclude`: only a committed `.gitignore` keeps the installed files out of the diff. In a container, the agent sees dependencies that were installed on the host: a native module built for macOS does not load in the Linux container. The setup command is part of the cache key.
+`task.setup` (`{ "command", "timeoutSec" }`, default 600 s) runs in the clone after the setup commit and before the agent, for example `pnpm install --frozen-lockfile`. Its output goes to `setup.log`. A failed setup makes the run an error. The diff uses the git dir of the runner, which has no `info/exclude`: only a committed `.gitignore` keeps the installed files out of the diff. In a container, the agent sees dependencies that were installed on the host: a native module built for macOS does not load in the Linux container. With pnpm, install the binaries of both platforms: `pnpm install --frozen-lockfile --os current --os linux --cpu current --cpu arm64 --libc current --libc glibc` (on a new clone; an existing `node_modules` stays as it is). The image has `pnpm`, because the proxy lets no package registry through. The setup command is part of the cache key.
+
+### Services
+
+`task.services` lists the containers that run while the agent works, for example the database of the tests. Each run gets its own, after the setup and before the agent. They go before the diff and the acceptance check, so the check keeps its own environment.
+
+```json
+"services": [{
+	"name": "db",
+	"image": "postgres:17",
+	"port": 5432,
+	"env": { "POSTGRES_PASSWORD": "test", "POSTGRES_DB": "app_test" },
+	"tmpfs": ["/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"],
+	"capAdd": ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"],
+	"ready": ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+	"agentEnv": { "TEST_DATABASE_URL": "postgres://postgres:test@${host}:${port}/app_test" }
+}]
+```
+
+- The agent can run commands in a service: a Postgres superuser can, with `COPY ... FROM PROGRAM`. So the service container gets the limits of the proxy: no capability but those of `capAdd`, `no-new-privileges`, a read-only root (`tmpfs` lists where it writes), and, on the run network, no DNS (the Docker daemon resolves names on the host). `capAdd` refuses `ALL`, `SYS_ADMIN` and `NET_ADMIN`. The official `postgres` image needs `["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]` and the tmpfs `/var/lib/postgresql/data`, `/var/run/postgresql` and `/tmp`.
+- A host agent reaches the service on `127.0.0.1`, at a port that Docker picks. Nothing listens on another address of the host.
+- A container agent reaches it on the internal network of the run, by its `name`, at its own `port`. The name is in `NO_PROXY`, and nothing is published on the host.
+- `ready` runs in the service container (`docker exec`) once a second, for 60 s at most. A service that does not answer makes the run an error before the agent starts, and the routing table leaves it out.
+- `agentEnv` cannot set a variable of the runner (`PATH`, `HOME`, the proxy variables and others). `${host}` and `${port}` are the address of the service as the agent reaches it.
+- A Codex agent on the host cannot reach a service: its sandbox has no network, `localhost` included. Use `container: true`.
+- The services are part of the cache key.
 
 ### Routing table
 

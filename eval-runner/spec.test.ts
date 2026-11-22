@@ -80,6 +80,27 @@ test('sandbox is an optional boolean', () => {
 	failure({ ...base(), configs: [{ name: 'a', sandbox: 'yes' }] }, 'spec.configs[0].sandbox');
 });
 
+test('task.services: a container per run with its agent environment; names, variables and the ready command are checked', () => {
+	const db = { name: 'db', image: 'postgres:17', port: 5432, env: { POSTGRES_PASSWORD: 'test' }, tmpfs: ['/var/lib/postgresql/data'], ready: ['pg_isready', '-h', '127.0.0.1'], agentEnv: { TEST_DATABASE_URL: 'postgres://postgres:test@${host}:${port}/t' } };
+	const withServices = (services: unknown) => ({ ...base(), task: { ...base().task, services } });
+	assert.deepEqual(validateSpec(withServices([db]), '/s').task.services, [db]);
+	assert.equal(validateSpec(base(), '/s').task.services, undefined);
+	failure(withServices([]), 'spec.task.services');
+	failure(withServices([{ ...db, name: 'DB' }]), 'spec.task.services[0].name');
+	failure(withServices([{ ...db, name: 'eval-proxy' }]), 'spec.task.services[0].name');
+	failure(withServices([db, db]), 'spec.task.services[1].name');
+	failure(withServices([{ ...db, ready: [] }]), 'spec.task.services[0].ready');
+	failure(withServices([{ ...db, agentEnv: {} }]), 'spec.task.services[0].agentEnv');
+	failure(withServices([{ ...db, agentEnv: { HTTPS_PROXY: 'x' } }]), 'spec.task.services[0].agentEnv.HTTPS_PROXY');
+	failure(withServices([{ ...db, agentEnv: { 'A-B': 'x' } }]), 'spec.task.services[0].agentEnv.A-B');
+	failure(withServices([{ ...db, env: { A: 1 } }]), 'spec.task.services[0].env.A');
+	failure(withServices([{ ...db, tmpfs: ['data'] }]), 'spec.task.services[0].tmpfs');
+	failure(withServices([{ ...db, port: 70000 }]), 'spec.task.services[0].port');
+	failure(withServices([{ ...db, volumes: ['/x'] }]), 'spec.task.services[0].volumes');
+	assert.deepEqual(validateSpec(withServices([{ ...db, capAdd: ['CHOWN', 'SETUID'] }]), '/s').task.services?.[0].capAdd, ['CHOWN', 'SETUID']);
+	for (const cap of ['ALL', 'SYS_ADMIN', 'chown']) failure(withServices([{ ...db, capAdd: [cap] }]), 'spec.task.services[0].capAdd');
+});
+
 test('other fields are checked: slug, runs range, config count, acceptance, unknown field, bad type', () => {
 	failure({ ...base(), name: 'Bad Name' }, 'spec.name');
 	failure({ ...base(), runs: 21 }, 'spec.runs');

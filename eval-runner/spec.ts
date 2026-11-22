@@ -41,11 +41,16 @@ export type Spec = {
 	name: string;
 	dir: string;
 	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
-	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] } };
+	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] }; services?: Service[] };
 	budget: { perRunUsd: number; perEvalUsd: number };
 	runs: number;
 	configs: Config[];
 };
+
+// A container that runs while the agent works, for example the database of the tests. `agentEnv` is the environment the
+// agent gets: `${host}` and `${port}` name the service, as the agent reaches it. The acceptance check does not use it.
+// The container has no capability but those of `capAdd`, and a read-only root: `tmpfs` lists where it writes.
+export type Service = { name: string; image: string; port: number; env?: Record<string, string>; tmpfs?: string[]; capAdd?: string[]; ready: string[]; agentEnv: Record<string, string> };
 
 type Obj = Record<string, unknown>;
 const fail = (field: string, problem: string): never => {
@@ -81,6 +86,44 @@ function setupOf(value: unknown) {
 	return { command: string(setup.command, 'spec.task.setup.command'), timeoutSec: optional(setup.timeoutSec, 'spec.task.setup.timeoutSec', (entry, field) => number(entry, field, 1)) ?? 600 };
 }
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// The runner sets these for the agent: a service must not replace them.
+const RESERVED_ENV = new Set(['PATH', 'HOME', 'PWD', 'USER', 'TMPDIR', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy']);
+
+function envOf(value: unknown, field: string, reserved: boolean): Record<string, string> {
+	const entries = Object.entries(object(value, field, Object.keys(isObject(value) ? value : {})));
+	for (const [key, entry] of entries) {
+		if (!ENV_NAME.test(key)) fail(`${field}.${key}`, 'must be a variable name');
+		if (reserved && RESERVED_ENV.has(key)) fail(`${field}.${key}`, 'the runner sets this variable');
+		if (typeof entry !== 'string') fail(`${field}.${key}`, 'required string');
+	}
+	return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function servicesOf(value: unknown): Service[] {
+	if (!Array.isArray(value) || value.length === 0) return fail('spec.task.services', 'required non-empty array');
+	const names = new Set<string>();
+	return value.map((raw, index) => {
+		const field = `spec.task.services[${index}]`;
+		const service = object(raw, field, ['name', 'image', 'port', 'env', 'tmpfs', 'capAdd', 'ready', 'agentEnv']);
+		const name = string(service.name, `${field}.name`);
+		// The name is the network alias of the service in a container run: one DNS label.
+		if (!/^[a-z][a-z0-9-]{0,30}$/.test(name)) fail(`${field}.name`, 'must match [a-z][a-z0-9-]{0,30}');
+		if (name === 'eval-proxy' || names.has(name)) fail(`${field}.name`, `${name} is taken`);
+		names.add(name);
+		const ready = strings(service.ready, `${field}.ready`);
+		if (ready.length === 0) fail(`${field}.ready`, 'required non-empty array: the command that succeeds once the service answers');
+		const agentEnv = envOf(service.agentEnv, `${field}.agentEnv`, true);
+		if (Object.keys(agentEnv).length === 0) fail(`${field}.agentEnv`, 'required non-empty object');
+		const tmpfs = optional(service.tmpfs, `${field}.tmpfs`, strings);
+		for (const path of tmpfs ?? []) if (!path.startsWith('/')) fail(`${field}.tmpfs`, `${path} must be an absolute path`);
+		const env = optional(service.env, `${field}.env`, (entry, at) => envOf(entry, at, false));
+		const capAdd = optional(service.capAdd, `${field}.capAdd`, strings);
+		for (const cap of capAdd ?? []) if (!/^[A-Z_]+$/.test(cap) || cap === 'ALL' || cap === 'SYS_ADMIN' || cap === 'NET_ADMIN') fail(`${field}.capAdd`, `${cap}: name one capability, not ALL, SYS_ADMIN or NET_ADMIN`);
+		return { name, image: string(service.image, `${field}.image`), port: number(service.port, `${field}.port`, 1, 65535, true), ...(env ? { env } : {}), ...(tmpfs ? { tmpfs } : {}), ...(capAdd ? { capAdd } : {}), ready, agentEnv };
+	});
+}
+
 // The exit code by which the acceptance command says that it failed before it judged the agent. 0 and 1 are taken.
 function infraExitCodeOf(value: unknown): { infraExitCode?: number } {
 	if (value === undefined || value === null) return {};
@@ -93,7 +136,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
-	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'setup', 'acceptance', 'hiddenTests']);
+	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'setup', 'acceptance', 'hiddenTests', 'services']);
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
@@ -213,7 +256,8 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 				timeoutSec: optional(acceptance.timeoutSec, 'spec.task.acceptance.timeoutSec', (value, field) => number(value, field, 1)) ?? 300,
 				...infraExitCodeOf(acceptance.infraExitCode)
 			},
-			...(hiddenTests === undefined ? {} : { hiddenTests })
+			...(hiddenTests === undefined ? {} : { hiddenTests }),
+			...(task.services === undefined || task.services === null ? {} : { services: servicesOf(task.services) })
 		},
 		budget: {
 			perRunUsd: number(budget.perRunUsd, 'spec.budget.perRunUsd', 0.000001),
