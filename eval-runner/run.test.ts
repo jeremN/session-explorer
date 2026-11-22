@@ -404,7 +404,7 @@ test('task.services: a database for the agent, on 127.0.0.1 for a host agent and
 	assert.equal(agent.passed!.TEST_DATABASE_URL, 'postgres://u:p@db:5432/t');
 	assert.equal(agent.passed!.NO_PROXY, 'localhost,127.0.0.1,db');
 	const service = calls.find((call) => call.args[0] === 'run' && call.args.includes('postgres:17'))!.args;
-	assert.deepEqual(service.slice(service.indexOf('--network'), service.indexOf('--network') + 4), ['--network', network, '--network-alias', 'db']);
+	assert.deepEqual(service.slice(service.indexOf('--network'), service.indexOf('--network') + 6), ['--network', network, '--network-alias', 'db', '--dns', '127.0.0.1']);
 	assert.ok(!service.includes('-p'));
 	// The service starts after the network and before the agent, and goes before the network.
 	const index = (match: (args: string[]) => boolean) => calls.findIndex((call) => match(call.args));

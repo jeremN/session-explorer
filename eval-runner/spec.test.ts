@@ -97,6 +97,8 @@ test('task.services: a container per run with its agent environment; names, vari
 	failure(withServices([{ ...db, tmpfs: ['data'] }]), 'spec.task.services[0].tmpfs');
 	failure(withServices([{ ...db, port: 70000 }]), 'spec.task.services[0].port');
 	failure(withServices([{ ...db, volumes: ['/x'] }]), 'spec.task.services[0].volumes');
+	assert.deepEqual(validateSpec(withServices([{ ...db, capAdd: ['CHOWN', 'SETUID'] }]), '/s').task.services?.[0].capAdd, ['CHOWN', 'SETUID']);
+	for (const cap of ['ALL', 'SYS_ADMIN', 'chown']) failure(withServices([{ ...db, capAdd: [cap] }]), 'spec.task.services[0].capAdd');
 });
 
 test('other fields are checked: slug, runs range, config count, acceptance, unknown field, bad type', () => {

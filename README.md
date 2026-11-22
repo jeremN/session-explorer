@@ -232,12 +232,14 @@ Gemini CLI is not supported: a personal Google account gets `IneligibleTierError
 	"image": "postgres:17",
 	"port": 5432,
 	"env": { "POSTGRES_PASSWORD": "test", "POSTGRES_DB": "app_test" },
-	"tmpfs": ["/var/lib/postgresql/data"],
+	"tmpfs": ["/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"],
+	"capAdd": ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"],
 	"ready": ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
 	"agentEnv": { "TEST_DATABASE_URL": "postgres://postgres:test@${host}:${port}/app_test" }
 }]
 ```
 
+- The agent can run commands in a service: a Postgres superuser can, with `COPY ... FROM PROGRAM`. So the service container gets the limits of the proxy: no capability but those of `capAdd`, `no-new-privileges`, a read-only root (`tmpfs` lists where it writes), and, on the run network, no DNS (the Docker daemon resolves names on the host). `capAdd` refuses `ALL`, `SYS_ADMIN` and `NET_ADMIN`. The official `postgres` image needs `["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]` and the tmpfs `/var/lib/postgresql/data`, `/var/run/postgresql` and `/tmp`.
 - A host agent reaches the service on `127.0.0.1`, at a port that Docker picks. Nothing listens on another address of the host.
 - A container agent reaches it on the internal network of the run, by its `name`, at its own `port`. The name is in `NO_PROXY`, and nothing is published on the host.
 - `ready` runs in the service container (`docker exec`) once a second, for 60 s at most. A service that does not answer makes the run an error before the agent starts, and the routing table leaves it out.

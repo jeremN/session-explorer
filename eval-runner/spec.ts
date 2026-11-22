@@ -49,7 +49,8 @@ export type Spec = {
 
 // A container that runs while the agent works, for example the database of the tests. `agentEnv` is the environment the
 // agent gets: `${host}` and `${port}` name the service, as the agent reaches it. The acceptance check does not use it.
-export type Service = { name: string; image: string; port: number; env?: Record<string, string>; tmpfs?: string[]; ready: string[]; agentEnv: Record<string, string> };
+// The container has no capability but those of `capAdd`, and a read-only root: `tmpfs` lists where it writes.
+export type Service = { name: string; image: string; port: number; env?: Record<string, string>; tmpfs?: string[]; capAdd?: string[]; ready: string[]; agentEnv: Record<string, string> };
 
 type Obj = Record<string, unknown>;
 const fail = (field: string, problem: string): never => {
@@ -104,7 +105,7 @@ function servicesOf(value: unknown): Service[] {
 	const names = new Set<string>();
 	return value.map((raw, index) => {
 		const field = `spec.task.services[${index}]`;
-		const service = object(raw, field, ['name', 'image', 'port', 'env', 'tmpfs', 'ready', 'agentEnv']);
+		const service = object(raw, field, ['name', 'image', 'port', 'env', 'tmpfs', 'capAdd', 'ready', 'agentEnv']);
 		const name = string(service.name, `${field}.name`);
 		// The name is the network alias of the service in a container run: one DNS label.
 		if (!/^[a-z][a-z0-9-]{0,30}$/.test(name)) fail(`${field}.name`, 'must match [a-z][a-z0-9-]{0,30}');
@@ -117,7 +118,9 @@ function servicesOf(value: unknown): Service[] {
 		const tmpfs = optional(service.tmpfs, `${field}.tmpfs`, strings);
 		for (const path of tmpfs ?? []) if (!path.startsWith('/')) fail(`${field}.tmpfs`, `${path} must be an absolute path`);
 		const env = optional(service.env, `${field}.env`, (entry, at) => envOf(entry, at, false));
-		return { name, image: string(service.image, `${field}.image`), port: number(service.port, `${field}.port`, 1, 65535, true), ...(env ? { env } : {}), ...(tmpfs ? { tmpfs } : {}), ready, agentEnv };
+		const capAdd = optional(service.capAdd, `${field}.capAdd`, strings);
+		for (const cap of capAdd ?? []) if (!/^[A-Z_]+$/.test(cap) || cap === 'ALL' || cap === 'SYS_ADMIN' || cap === 'NET_ADMIN') fail(`${field}.capAdd`, `${cap}: name one capability, not ALL, SYS_ADMIN or NET_ADMIN`);
+		return { name, image: string(service.image, `${field}.image`), port: number(service.port, `${field}.port`, 1, 65535, true), ...(env ? { env } : {}), ...(tmpfs ? { tmpfs } : {}), ...(capAdd ? { capAdd } : {}), ready, agentEnv };
 	});
 }
 

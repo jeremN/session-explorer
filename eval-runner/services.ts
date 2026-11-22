@@ -27,10 +27,13 @@ export async function startServices(exec: Exec, services: Service[], run: { name
 	const docker = run.docker ?? 'docker';
 	for (const service of services) {
 		const name = serviceContainer(run.name, service);
-		const args = ['run', '-d', '--name', name, '--pids-limit', '512', '--memory', '1g'];
+		// The agent can run commands in the service (a Postgres superuser can, with COPY FROM PROGRAM), so the service gets
+		// the limits of the proxy: no capability but those it names, no new privilege, a read-only root (its tmpfs
+		// mounts are the only places it writes), and no DNS on the run network, which the Docker daemon resolves on the host.
+		const args = ['run', '-d', '--name', name, '--cap-drop', 'ALL', ...(service.capAdd ?? []).flatMap((cap) => ['--cap-add', cap]), '--security-opt', 'no-new-privileges', '--read-only', '--pids-limit', '512', '--memory', '1g', '--cpus', '2'];
 		for (const path of service.tmpfs ?? []) args.push('--tmpfs', path);
 		for (const [key, value] of Object.entries(service.env ?? {})) args.push('-e', `${key}=${value}`);
-		if (run.network) args.push('--network', run.network, '--network-alias', service.name);
+		if (run.network) args.push('--network', run.network, '--network-alias', service.name, '--dns', '127.0.0.1');
 		else args.push('-p', `127.0.0.1::${service.port}`);
 		args.push(service.image);
 		started.containers.push(name);
