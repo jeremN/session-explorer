@@ -1,7 +1,9 @@
 // eval diff: measures what a change to a CLAUDE.md, an AGENTS.md or a skill does. It runs the task of a spec with the
 // version of the file at HEAD (before) and with the working tree (after). The cache keeps the "before" runs, and a
 // borderline result gets more runs, up to --max-runs.
-// Usage: node eval-runner/diff.ts <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10] [--claude <path>] [--out <dir>]
+// Usage: node eval-runner/diff.ts <spec.json> --file <path> [--before <path>] [--config <name>] [--runs 3] [--max-runs 10] [--claude <path>] [--out <dir>]
+// --before names a saved copy of the file (or of the skill directory, under the same directory name) that replaces the
+// version at HEAD: for a file outside git, such as ~/.claude/CLAUDE.md. eval:watch keeps these copies.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
@@ -12,10 +14,11 @@ import { SpecError, loadSpec } from './spec.ts';
 import type { Config } from './spec.ts';
 import type { ConfigStats, RunRecord } from './stats.ts';
 
-const USAGE = `Usage: node eval-runner/diff.ts <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10] [--claude <path>] [--out <dir>]
+const USAGE = `Usage: node eval-runner/diff.ts <spec.json> --file <path> [--before <path>] [--config <name>] [--runs 3] [--max-runs 10] [--claude <path>] [--out <dir>]
 
   <spec.json>    the task to measure the change on
   --file P       a CLAUDE.md or AGENTS.md file (it becomes the CLAUDE.md of the clone), or a skill directory
+  --before P     a saved copy of the file or skill directory, to use as the version before the change instead of HEAD
   --config N     the config of the spec to start from (default: the first one)
   --runs N       runs per side in the first round (default 3)
   --max-runs N   runs per side at most, when the result stays borderline (default 10)
@@ -84,6 +87,16 @@ export async function headVersion(exec: Exec, path: string, work: string): Promi
 	return { ...target, head: join(work, rel) };
 }
 
+// A saved copy as the version before the change. A skill copy must have the directory name of the skill: the runner
+// installs a skill by its directory name.
+export function savedVersion(path: string, before: string): Target {
+	const real = realpathSync(path);
+	const isSkill = statSync(real).isDirectory();
+	if (isSkill !== statSync(before).isDirectory()) throw new SpecError(`--before: ${before} must be a ${isSkill ? 'directory' : 'file'}, as ${path} is`);
+	if (isSkill && basename(before) !== basename(real)) throw new SpecError(`--before: the directory must be named ${basename(real)}, as the skill`);
+	return { kind: isSkill ? 'skill' : 'claudeMd', path: real, head: isSkill ? realpathSync(before) : readFileSync(before, 'utf8') };
+}
+
 // The Skill tool calls of a skill, per run. A plugin skill is named `plugin:name`.
 function loadsOf(runs: RunRecord[], config: string, skill: string) {
 	return runs
@@ -92,7 +105,7 @@ function loadsOf(runs: RunRecord[], config: string, skill: string) {
 }
 
 function parseArgs(argv: string[]) {
-	const options = { spec: '', file: '', config: undefined as string | undefined, runs: 3, maxRuns: 10, claude: 'claude', out: join(import.meta.dirname, 'out') };
+	const options = { spec: '', file: '', before: undefined as string | undefined, config: undefined as string | undefined, runs: 3, maxRuns: 10, claude: 'claude', out: join(import.meta.dirname, 'out') };
 	for (let index = 0; index < argv.length; index++) {
 		const flag = argv[index];
 		const value = () => {
@@ -107,6 +120,7 @@ function parseArgs(argv: string[]) {
 		};
 		if (flag === '--help' || flag === '-h') return 'help' as const;
 		else if (flag === '--file') options.file = resolve(value());
+		else if (flag === '--before') options.before = resolve(value());
 		else if (flag === '--config') options.config = value();
 		else if (flag === '--runs') options.runs = count('--runs');
 		else if (flag === '--max-runs') options.maxRuns = count('--max-runs');
@@ -118,6 +132,7 @@ function parseArgs(argv: string[]) {
 	if (!options.spec) throw new SpecError('<spec.json>: required');
 	if (!options.file || !existsSync(options.file)) throw new SpecError('--file: required, and the path must exist');
 	if (options.maxRuns < options.runs) throw new SpecError('--max-runs: must be at least --runs');
+	if (options.before !== undefined && !existsSync(options.before)) throw new SpecError('--before: the path must exist');
 	return options;
 }
 
@@ -136,6 +151,7 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 		const found = options.config === undefined ? spec.configs[0] : spec.configs.find((config) => config.name === options.config);
 		if (!found) throw new SpecError(`--config: unknown config ${options.config}`);
 		template = found;
+		if (options.before) savedVersion(options.file, options.before);
 	} catch (error) {
 		if (!(error instanceof SpecError)) throw error;
 		console.error(`${error.message}\n\n${USAGE}`);
@@ -145,9 +161,9 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	mkdirSync(options.out, { recursive: true });
 	const work = mkdtempSync(join(options.out, '.diff-'));
 	try {
-		const target = await headVersion(exec, options.file, join(work, 'head'));
+		const target = options.before ? savedVersion(options.file, options.before) : await headVersion(exec, options.file, join(work, 'head'));
 		if (target.kind === 'claudeMd' && target.head === readFileSync(target.path, 'utf8')) {
-			console.log(`${options.file}: no change against HEAD.`);
+			console.log(`${options.file}: no change against ${options.before ? 'the version before' : 'HEAD'}.`);
 			return 0;
 		}
 		const derived = join(work, 'spec.json');

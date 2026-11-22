@@ -135,6 +135,25 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 - For a skill, the report also lists how many times the skill loaded in each run. A skill that never loads cannot help.
 - The report goes to `diff.json` in the eval directory. It informs; it does not block anything.
 
+`--before <path>` replaces the version at `HEAD` with a saved copy: of the file, or of the skill directory under the same directory name. Use it for a file outside git, such as `~/.claude/CLAUDE.md`.
+
+### Watch your instruction files
+
+`npm run eval:watch` lists the watched instruction files that changed since their last measure, and the most that each measure can cost. It spends nothing. `~/.claude` is no git repository, so the version before a change is the copy that the last measure kept, not `HEAD`.
+
+The list is `eval-runner/out/watch.json` (gitignored, `--watch` names another). Each entry names the file and the spec of a task that measures it:
+
+```json
+{ "watch": [{ "file": "~/.claude/skills/tidy", "spec": "suites/tidy.json", "config": "sonnet", "runs": 3, "maxRuns": 6 }] }
+```
+
+- `file`: a CLAUDE.md, an AGENTS.md or a skill directory. `~` is your home. A relative path starts from the folder of the list, as `spec` does.
+- `config`, `runs` (default 3) and `maxRuns` (default 10) go to `eval:diff`. The most a measure costs is both sides at `maxRuns` runs, at the `perRunUsd` of the spec.
+- `--run` measures each change with `eval:diff --before <copy>`. Then the new version becomes the copy, with the verdict. A measure that does not finish keeps the old copy. A file that was never measured gets its first copy, with no measure and no spend. `--only <name>` limits the run to the names that the list prints.
+- `--status-line` prints one line when a watched file changed, and nothing otherwise, never an error. It is made for a `SessionStart` hook: `node <repo>/eval-runner/watch.ts --status-line`.
+- The copies and the verdicts are in `eval-runner/out/watch/`.
+- A measure says something only when the task needs the skill. For a skill, the report lists how many times the skill loaded in each run.
+
 ### Mine tasks from your sessions
 
 `npm run eval:mine -- [--days 30] [--projects <regex>] [--out <file>]` reads your local Claude Code sessions and writes candidate tasks to `eval-runner/out/candidates.json` (gitignored). A task is a candidate when:
