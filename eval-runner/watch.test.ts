@@ -59,7 +59,7 @@ test('a first --run keeps a copy without a measure; a change is listed with its 
 		return 0;
 	};
 
-	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill}: never measured`));
+	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill} \\(.*skills/tidy on spec\\): never measured`));
 	const first = await run(['--watch', watch, '--run'], diff);
 	assert.equal(first.code, 0);
 	assert.match(first.out, /first copy kept/);
@@ -70,10 +70,10 @@ test('a first --run keeps a copy without a measure; a change is listed with its 
 	writeFileSync(join(dir, 'skills', 'tidy', 'SKILL.md'), 'v2\n');
 	const listed = await run(['--watch', watch]);
 	// Two sides, four runs each, at 0.5 $ a run.
-	assert.match(listed.out, new RegExp(`${skill}: changed, at most 4 \\$ to measure`));
-	assert.match(listed.out, new RegExp(`${claudeMd}: unchanged`));
+	assert.match(listed.out, new RegExp(`${skill} \\(.*\\): changed, at most 4 \\$ to measure`));
+	assert.match(listed.out, new RegExp(`${claudeMd} \\(.*CLAUDE.md on spec/sonnet\\): unchanged`));
 	assert.equal(calls.length, 0);
-	assert.match((await run(['--watch', watch, '--status-line'])).out, /^eval:watch: 1 watched file\(s\) changed since their last measure \(tidy\)/);
+	assert.match((await run(['--watch', watch, '--status-line'])).out, /^eval:watch: 1 watched file\(s\) changed since their last measure \(.*skills\/tidy\)/);
 
 	const measured = await run(['--watch', watch, '--run', '--only', skill], diff);
 	assert.equal(measured.code, 0, measured.err);
@@ -82,7 +82,7 @@ test('a first --run keeps a copy without a measure; a change is listed with its 
 	assert.match(measured.out, /: worse\. Report:/);
 	// The measured version becomes the next "before", and the verdict stays in the list.
 	assert.equal(readFileSync(join(out, 'watch', skill, 'tidy', 'SKILL.md'), 'utf8'), 'v2\n');
-	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill}: unchanged, last measure: worse`));
+	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill} \\(.*\\): unchanged, last measure: worse`));
 });
 
 test('one file on two tasks gets two names, two copies and one status line', async () => {
@@ -93,7 +93,7 @@ test('one file on two tasks gets two names, two copies and one status line', asy
 	assert.notEqual(first, second);
 	await run(['--watch', watch, '--run']);
 	writeFileSync(join(dir, 'CLAUDE.md'), 'rules v2\n');
-	assert.equal((await run(['--watch', watch, '--status-line'])).out, 'eval:watch: 1 watched file(s) changed since their last measure (CLAUDE.md). See pnpm eval:watch.');
+	assert.equal((await run(['--watch', watch, '--status-line'])).out, `eval:watch: 1 watched file(s) changed since their last measure (${join(dir, 'CLAUDE.md')}). See pnpm eval:watch.`);
 });
 
 test('a measure that does not finish keeps the old copy, and an unknown name or a missing list is refused', async () => {

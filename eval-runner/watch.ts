@@ -71,6 +71,10 @@ export function loadWatch(file: string): Entry[] {
 // have two entries, one per task: each keeps its own copy and its own verdict.
 export const nameOf = (entry: Entry) => `${basename(entry.file)}-${createHash('sha256').update(`${entry.file}\0${entry.spec}`).digest('hex').slice(0, 6)}`;
 
+// The file with ~ for the home, the task and the config: the name alone does not tell two CLAUDE.md apart.
+export const tilde = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
+export const labelOf = (entry: Entry) => `${tilde(entry.file)} on ${basename(entry.spec, '.json')}${entry.config ? `/${entry.config}` : ''}`;
+
 export function statusOf(entry: Entry, saved: Saved | undefined): Status {
 	if (!existsSync(entry.file)) return 'missing';
 	if (!saved) return 'new';
@@ -117,7 +121,7 @@ export async function main(argv: string[], deps: Deps = { diff: (args) => diffMa
 		try {
 			if (!existsSync(options.watch)) return 0;
 			const state = readState(options.watch);
-			const changed = [...new Set(loadWatch(options.watch).filter((entry) => statusOf(entry, state[nameOf(entry)]) === 'changed').map((entry) => basename(entry.file)))];
+			const changed = [...new Set(loadWatch(options.watch).filter((entry) => statusOf(entry, state[nameOf(entry)]) === 'changed').map((entry) => tilde(entry.file)))];
 			if (changed.length) console.log(`eval:watch: ${changed.length} watched file(s) changed since their last measure (${changed.join(', ')}). See pnpm eval:watch.`);
 		} catch {}
 		return 0;
@@ -158,7 +162,7 @@ export async function main(argv: string[], deps: Deps = { diff: (args) => diffMa
 			continue;
 		}
 		total += cost;
-		console.log(`${name}: ${status === 'new' ? 'never measured' : status === 'same' ? 'unchanged' : status}${status === 'changed' ? `, at most ${cost} $ to measure` : ''}${last}`);
+		console.log(`${name} (${labelOf(entry)}): ${status === 'new' ? 'never measured' : status === 'same' ? 'unchanged' : status}${status === 'changed' ? `, at most ${cost} $ to measure` : ''}${last}`);
 		if (!options.run || status === 'same' || status === 'missing') continue;
 		const copy = join(store, name, basename(entry.file));
 		const keep = (verdict?: string, evalDir?: string) => {
