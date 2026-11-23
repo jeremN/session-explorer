@@ -35,3 +35,11 @@ test('costOf uses the cache read multiplier of the model when the rate sets one'
 	const rates = { 'model-b': { input: 4, output: 20, cacheRead: 0.05 } };
 	assert.equal(costOf('model-b', { fresh: 0, cw5m: 0, cw1h: 0, out: 0, cr: 1_000_000 }, rates), 0.2);
 });
+
+test('costOf: a long-context rate multiplies one request above the threshold, not below it', () => {
+	const rates = { m: { input: 1, output: 2, longContext: { above: 100, factor: 5 } } };
+	assert.equal(costOf('m', { fresh: 100, cw5m: 0, cw1h: 0, out: 10, cr: 0 }, rates), 120 / 1e6);
+	// The cache reads count in the prompt size: 1 + 100 tokens is above 100.
+	assert.equal(costOf('m', { fresh: 1, cw5m: 0, cw1h: 0, out: 10, cr: 100 }, rates), ((1 + 10 + 20) * 5) / 1e6);
+});
+
