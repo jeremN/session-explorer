@@ -23,6 +23,22 @@ export function imageTag(...parts: Buffer[]) {
 	return `eval-runner-agents:${hash.digest('hex').slice(0, 12)}`;
 }
 
+// The ARG defaults of the Dockerfile: the CLI versions of the image.
+export function imageArgs(dockerfile = readFileSync(join(DOCKERFILE_DIR, 'Dockerfile'), 'utf8')): Record<string, string> {
+	return Object.fromEntries([...dockerfile.matchAll(/^ARG ([A-Z_]+)=(\S+)$/gm)].map((match) => [match[1], match[2]]));
+}
+
+// The Dockerfile with new ARG defaults. An ARG that the Dockerfile does not have is an error, not a silent no-op.
+export function withArgs(dockerfile: string, values: Record<string, string>) {
+	let text = dockerfile;
+	for (const [name, value] of Object.entries(values)) {
+		const line = new RegExp(`^ARG ${name}=\\S+$`, 'm');
+		if (!line.test(text)) throw new Error(`the Dockerfile has no ARG ${name}`);
+		text = text.replace(line, `ARG ${name}=${value}`);
+	}
+	return text;
+}
+
 // The hosts that the agent container may reach: the defaults of the agent (container/allow.json), and `extra` from
 // the spec.
 export function allowedHosts(agent: Exclude<AgentName, 'claude'>, extra: readonly string[] = []): string[] {
@@ -153,9 +169,24 @@ export async function removeContainer(exec: Exec, name: string, docker = 'docker
 // Docker names allow [a-zA-Z0-9_.-].
 export const containerName = (evalId: string, runId: string) => `eval-runner-${evalId}-${runId}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
 
-// pnpm eval:image: builds the image under the tag the runner expects.
+// pnpm eval:image [--latest]: builds the image under the tag the runner expects. --latest first writes the last
+// published versions of codex and opencode in the Dockerfile; the new versions give a new tag, so a new cache key.
 if (import.meta.main) {
 	const { spawnSync } = await import('node:child_process');
+	if (process.argv.includes('--latest')) {
+		const file = join(DOCKERFILE_DIR, 'Dockerfile');
+		const before = readFileSync(file, 'utf8');
+		const args = imageArgs(before);
+		const latest = (pkg: string) => {
+			const found = spawnSync('pnpm', ['view', pkg, 'version'], { encoding: 'utf8' });
+			const version = found.stdout.trim().split('\n').pop() ?? '';
+			if (found.status !== 0 || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`pnpm view ${pkg} version failed: ${(found.stderr || found.stdout).trim().slice(0, 200)}`);
+			return version;
+		};
+		const values = { CODEX_VERSION: latest('@openai/codex'), OPENCODE_VERSION: latest(args.OPENCODE_PACKAGE ?? 'opencode-ai') };
+		for (const [name, value] of Object.entries(values)) console.log(`${name}: ${args[name]} -> ${value}`);
+		writeFileSync(file, withArgs(before, values));
+	}
 	const tag = imageTag();
 	console.log(`docker build -t ${tag} ${DOCKERFILE_DIR}`);
 	process.exitCode = spawnSync('docker', ['build', '-t', tag, DOCKERFILE_DIR], { stdio: 'inherit' }).status ?? 1;

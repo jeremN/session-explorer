@@ -214,7 +214,10 @@ With `container: true`, a Codex or opencode config runs its agent in Docker. Bui
 
 ```sh
 pnpm eval:image   # docker build -t eval-runner-agents:<hash of the Dockerfile> eval-runner/container
+pnpm eval:image --latest   # first write the last published codex and opencode versions in the Dockerfile
 ```
+
+The Dockerfile names the CLI versions, because they are part of the cache key: a new version gives a new tag, so the runs of the old version are never reused. `--latest` reads them with `pnpm view` (`@openai/codex`, and `@opencode/cli`, where opencode 2 is published; `opencode-ai` stops at 1.x). The runner picks the options of opencode from `OPENCODE_VERSION`. pnpm stays at the `packageManager` version of the task repos: another version would fetch that one at start, and the proxy refuses the registry.
 
 The image (`eval-runner/container/Dockerfile`) pins Node and the CLI versions. Its tag is the hash of the Dockerfile, and it is the CLI version in the cache key. The runner refuses to start when the image is missing.
 

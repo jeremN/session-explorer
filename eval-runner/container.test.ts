@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { allowedHosts, blockedTargets, containerHome, containerName, containerize, imageTag, networkOf, startNetwork, stopNetwork } from './container.ts';
+import { allowedHosts, blockedTargets, containerHome, containerName, containerize, imageArgs, imageTag, networkOf, startNetwork, stopNetwork, withArgs } from './container.ts';
 import type { Exec } from './exec.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'eval-container-'));
@@ -115,3 +115,13 @@ test('containerize passes each variable by name only, never PWD, and keeps the a
 test('containerName keeps the characters docker accepts', () => {
 	assert.equal(containerName('20261117-095311-a b', 'codex-1'), 'eval-runner-20261117-095311-a-b-codex-1');
 });
+
+test('imageArgs reads the CLI versions of the Dockerfile, and withArgs writes new ones', () => {
+	const dockerfile = 'FROM node\nARG CODEX_VERSION=0.1.0\nARG OPENCODE_PACKAGE=@opencode/cli\nARG OPENCODE_VERSION=2.0.0\nRUN true\n';
+	assert.deepEqual(imageArgs(dockerfile), { CODEX_VERSION: '0.1.0', OPENCODE_PACKAGE: '@opencode/cli', OPENCODE_VERSION: '2.0.0' });
+	assert.equal(withArgs(dockerfile, { CODEX_VERSION: '0.2.0' }), dockerfile.replace('0.1.0', '0.2.0'));
+	assert.throws(() => withArgs(dockerfile, { PNPM_VERSION: '12.0.0' }), /no ARG PNPM_VERSION/);
+	// The real Dockerfile names its opencode version: the runner picks the options of opencode from it.
+	assert.match(imageArgs().OPENCODE_VERSION ?? '', /^\d+\.\d+\.\d+$/);
+});
+
