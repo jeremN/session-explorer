@@ -61,6 +61,8 @@ export function codexHome(source = process.env.CODEX_HOME ?? join(homedir(), '.c
 export function codexInvocation(config: Config, home: string, prompt: string, sandbox: 'workspace-write' | 'danger-full-access' = 'workspace-write'): Invocation {
 	const args = ['exec', '--json', '--sandbox', sandbox, '--ephemeral', '--ignore-rules', '--skip-git-repo-check'];
 	if (config.model) args.push('--model', config.model);
+	// A -c value is TOML: the level goes in quotes.
+	if (config.effort) args.push('-c', `model_reasoning_effort="${config.effort}"`);
 	args.push('-');
 	return { args, files: [], env: { ...AGENT_ENV, CODEX_HOME: home }, input: prompt };
 }

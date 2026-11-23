@@ -12,6 +12,9 @@ export const AGENT_NAMES = ['claude', 'codex', 'opencode'] as const;
 export type AgentName = (typeof AGENT_NAMES)[number];
 // These fields drive the Claude Code CLI. The other agents have no such option.
 const CLAUDE_ONLY = ['appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare'] as const;
+export const EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] } as const;
+export type Effort = (typeof EFFORTS.claude)[number];
+
 export type Config = {
 	name: string;
 	// Unset means claude. The runner leaves it unset, so the cache keys of the Claude configs stay the same.
@@ -25,6 +28,9 @@ export type Config = {
 	// Hosts the container may reach besides the defaults of its agent (container/allow.json): a name, or *.domain.
 	containerAllow?: string[];
 	model?: string;
+	// The reasoning effort. Unset: the default of the agent (Claude Code in print mode sends medium). opencode has no
+	// flag: it names a variant in the model, provider/model#variant.
+	effort?: Effort;
 	claudeMd?: { text: string } | { file: string };
 	appendSystemPrompt?: string;
 	settings?: Record<string, unknown> | string;
@@ -161,7 +167,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
+		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -226,6 +232,13 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			if (!result.container) fail(`${at}.containerAllow`, 'only for a config with container: true');
 			for (const host of containerAllow) if (!/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host)) fail(`${at}.containerAllow`, `${host} is not a host name or *.domain`);
 			result.containerAllow = containerAllow;
+		}
+		if (config.effort !== undefined && config.effort !== null) {
+			const agent = result.agent ?? 'claude';
+			if (agent === 'opencode') fail(`${at}.effort`, 'opencode has no effort flag: name a variant in the model, provider/model#variant');
+			const levels: readonly string[] = EFFORTS[agent];
+			if (!levels.includes(config.effort as string)) fail(`${at}.effort`, `must be one of ${levels.join(', ')} for ${agent}`);
+			result.effort = config.effort as Effort;
 		}
 		if (result.container && !result.agent) fail(`${at}.container`, 'only codex and opencode run in a container. Claude Code has its own sandbox (sandbox: true)');
 		if (result.price && result.agent !== 'codex') fail(`${at}.price`, 'only codex needs a price: the other agents give their cost');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildMatrix, propose, readMatrixRoutes, renderMarkdown, verdictOf } from './matrix.ts';
+import { buildMatrix, propose, readMatrixRoutes, renderMarkdown, routeOf, verdictOf } from './matrix.ts';
 import type { SavedEval } from './matrix.ts';
 import type { RunRecord } from './stats.ts';
 
@@ -106,3 +106,10 @@ test('testShare: the mean share of tests passed per task, then the mean of the t
 	assert.match(renderMarkdown(matrix), /\| claude\/sonnet \| 1\/3 \| 85 % \|/);
 	assert.match(renderMarkdown(matrix), /\| codex\/gpt-x \| 0\/1 \| — \|/);
 });
+
+test('the effort is part of the route', () => {
+	assert.equal(routeOf({ name: 'a', model: 'sonnet' }), 'claude/sonnet');
+	assert.equal(routeOf({ name: 'a', model: 'sonnet', effort: 'high' }), 'claude/sonnet@high');
+	assert.equal(routeOf({ name: 'a', agent: 'codex', model: 'gpt-x', effort: 'low' }), 'codex/gpt-x@low');
+});
+

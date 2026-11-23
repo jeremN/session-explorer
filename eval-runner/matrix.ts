@@ -28,7 +28,8 @@ export const MIN_RUNS = 3;
 // These fields change what the agent is told. Such a config is an experiment on the instructions, not a route.
 const EXPERIMENT_FIELDS = ['claudeMd', 'appendSystemPrompt', 'skills', 'plugins'] as const;
 
-export const routeOf = (config: Config) => `${config.agent ?? 'claude'}/${config.model ?? 'default'}`;
+// The effort is part of the route: sonnet at high effort is another route than sonnet at the default effort.
+export const routeOf = (config: Config) => `${config.agent ?? 'claude'}/${config.model ?? 'default'}${config.effort ? `@${config.effort}` : ''}`;
 const taskKey = (ev: SavedEval) => createHash('sha256').update(`${ev.baseSha}\0${ev.spec.task.prompt ?? ''}\0${ev.spec.task.acceptance.command}`).digest('hex').slice(0, 12);
 
 // What a run says about its route. An error with no billed token is a failure of the runner or of the CLI start: the

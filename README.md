@@ -176,6 +176,7 @@ A field that is absent keeps the CLI default.
 | Field | Maps to |
 |---|---|
 | `model` | `--model <value>` |
+| `effort` | `--effort <level>`: `low`, `medium`, `high`, `xhigh` or `max`. Unset: Claude Code in print mode sends `medium` (see `output_config.effort` in the transcript). Codex takes `-c model_reasoning_effort="<level>"`, from `low` to `xhigh`. opencode has no flag: name a variant in the model, `provider/model#variant`. The effort is part of the route of the routing table: `claude/sonnet@high` |
 | `claudeMd` (`{ "text" }` or `{ "file" }`) | `CLAUDE.md` of the clone, committed in the setup commit |
 | `appendSystemPrompt` | `--append-system-prompt <value>` |
 | `settings` (object or file) | `<run>/settings.json`, passed as `--settings`. Put hooks here. |
