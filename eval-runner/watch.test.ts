@@ -85,6 +85,17 @@ test('a first --run keeps a copy without a measure; a change is listed with its 
 	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill}: unchanged, last measure: worse`));
 });
 
+test('one file on two tasks gets two names, two copies and one status line', async () => {
+	const { dir, watch } = fixture('two');
+	writeFileSync(join(dir, 'spec2.json'), readFileSync(join(dir, 'spec.json'), 'utf8').replace('tidy-task', 'tidy-task-2'));
+	writeFileSync(watch, JSON.stringify({ watch: [{ file: '../CLAUDE.md', spec: '../spec.json' }, { file: '../CLAUDE.md', spec: '../spec2.json' }] }));
+	const [first, second] = loadWatch(watch).map(nameOf);
+	assert.notEqual(first, second);
+	await run(['--watch', watch, '--run']);
+	writeFileSync(join(dir, 'CLAUDE.md'), 'rules v2\n');
+	assert.equal((await run(['--watch', watch, '--status-line'])).out, 'eval:watch: 1 watched file(s) changed since their last measure (CLAUDE.md). See pnpm eval:watch.');
+});
+
 test('a measure that does not finish keeps the old copy, and an unknown name or a missing list is refused', async () => {
 	const { dir, watch, out } = fixture('fail');
 	await run(['--watch', watch, '--run']);
