@@ -67,8 +67,9 @@ export function loadWatch(file: string): Entry[] {
 	});
 }
 
-// The name of an entry in the list and on disk: the file name, and a short hash of its path for two files of one name.
-export const nameOf = (entry: Entry) => `${basename(entry.file)}-${createHash('sha256').update(entry.file).digest('hex').slice(0, 6)}`;
+// The name of an entry in the list and on disk: the file name, and a short hash of the file and the spec. One file can
+// have two entries, one per task: each keeps its own copy and its own verdict.
+export const nameOf = (entry: Entry) => `${basename(entry.file)}-${createHash('sha256').update(`${entry.file}\0${entry.spec}`).digest('hex').slice(0, 6)}`;
 
 export function statusOf(entry: Entry, saved: Saved | undefined): Status {
 	if (!existsSync(entry.file)) return 'missing';
@@ -116,8 +117,8 @@ export async function main(argv: string[], deps: Deps = { diff: (args) => diffMa
 		try {
 			if (!existsSync(options.watch)) return 0;
 			const state = readState(options.watch);
-			const changed = loadWatch(options.watch).filter((entry) => statusOf(entry, state[nameOf(entry)]) === 'changed');
-			if (changed.length) console.log(`eval:watch: ${changed.length} watched file(s) changed since their last measure (${changed.map((entry) => basename(entry.file)).join(', ')}). See pnpm eval:watch.`);
+			const changed = [...new Set(loadWatch(options.watch).filter((entry) => statusOf(entry, state[nameOf(entry)]) === 'changed').map((entry) => basename(entry.file)))];
+			if (changed.length) console.log(`eval:watch: ${changed.length} watched file(s) changed since their last measure (${changed.join(', ')}). See pnpm eval:watch.`);
 		} catch {}
 		return 0;
 	}
