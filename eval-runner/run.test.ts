@@ -327,7 +327,7 @@ test('a container config runs the agent through docker: the clone and a private 
 	const docker = join(import.meta.dirname, 'fixtures', 'fake-docker.mjs');
 	const missing = await cli([spec, '--out', out, '--docker', docker], { FAKE_DOCKER_NO_IMAGE: '1' });
 	assert.equal(missing.code, 2);
-	assert.match(missing.stderr, /npm run eval:image/);
+	assert.match(missing.stderr, /pnpm eval:image/);
 	const down = await cli([spec, '--out', out, '--docker', docker], { FAKE_DOCKER_DOWN: '1' });
 	assert.equal(down.code, 2);
 	assert.match(down.stderr, /Docker does not answer \(context fake-context\): failed to connect to the docker API/);

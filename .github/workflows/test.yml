@@ -17,4 +17,6 @@ jobs:
         with:
           node-version: 24
       - run: git config --global user.email ci@localhost && git config --global user.name ci
-      - run: npm test
+      # pnpm comes from the packageManager field of package.json.
+      - run: corepack enable
+      - run: pnpm test

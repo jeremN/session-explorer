@@ -127,7 +127,7 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 
 ### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
 
-`npm run eval:diff -- <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10]` runs the task of the spec twice per round: `before` gets the file as it is at `HEAD`, `after` gets the working tree. Both start from the first config of the spec (or `--config`).
+`pnpm eval:diff <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10]` runs the task of the spec twice per round: `before` gets the file as it is at `HEAD`, `after` gets the working tree. Both start from the first config of the spec (or `--config`).
 
 - A file (`CLAUDE.md`, `AGENTS.md`) becomes the CLAUDE.md of the clone. A directory is a skill: it replaces the skill of the config with the same directory name.
 - Verdict: `same` when the pass counts are equal, `better` or `worse` when the gap is half the runs or more, `borderline` otherwise. A borderline result gets more runs (3, then 6, then 10). The cache reuses the earlier runs, so a round pays only for the new ones.
@@ -139,7 +139,7 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 
 ### Watch your instruction files
 
-`npm run eval:watch` lists the watched instruction files that changed since their last measure, and the most that each measure can cost. It spends nothing. `~/.claude` is no git repository, so the version before a change is the copy that the last measure kept, not `HEAD`.
+`pnpm eval:watch` lists the watched instruction files that changed since their last measure, and the most that each measure can cost. It spends nothing. `~/.claude` is no git repository, so the version before a change is the copy that the last measure kept, not `HEAD`.
 
 The list is `eval-runner/out/watch.json` (gitignored, `--watch` names another). Each entry names the file and the spec of a task that measures it:
 
@@ -160,7 +160,7 @@ The list is `eval-runner/out/watch.json` (gitignored, `--watch` names another). 
 
 ### Mine tasks from your sessions
 
-`npm run eval:mine -- [--days 30] [--projects <regex>] [--out <file>]` reads your local Claude Code sessions and writes candidate tasks to `eval-runner/out/candidates.json` (gitignored). A task is a candidate when:
+`pnpm eval:mine [--days 30] [--projects <regex>] [--out <file>]` reads your local Claude Code sessions and writes candidate tasks to `eval-runner/out/candidates.json` (gitignored). A task is a candidate when:
 
 - its last check after the last edit passed;
 - its working directory is a git repository that still exists;
@@ -213,7 +213,7 @@ opencode works in `$PWD`, not in the working directory of its process. A first t
 With `container: true`, a Codex or opencode config runs its agent in Docker. Build the image first:
 
 ```sh
-npm run eval:image   # docker build -t eval-runner-agents:<hash of the Dockerfile> eval-runner/container
+pnpm eval:image   # docker build -t eval-runner-agents:<hash of the Dockerfile> eval-runner/container
 ```
 
 The image (`eval-runner/container/Dockerfile`) pins Node and the CLI versions. Its tag is the hash of the Dockerfile, and it is the CLI version in the cache key. The runner refuses to start when the image is missing.
@@ -272,10 +272,10 @@ Gemini CLI is not supported: a personal Google account gets `IneligibleTierError
 
 ### Routing table
 
-`npm run eval:matrix` reads every `eval.json` of the output folder and prints, per task category, the pass rate, the median cost and the median time of each route (agent and model). It writes `matrix.json` and `matrix.md` next to the evals.
+`pnpm eval:matrix` reads every `eval.json` of the output folder and prints, per task category, the pass rate, the median cost and the median time of each route (agent and model). It writes `matrix.json` and `matrix.md` next to the evals.
 
 ```sh
-npm run eval:matrix -- --exclude <evalId>,<evalId>/<runId>   # leave out an eval, or one run known to be wrong
+pnpm eval:matrix --exclude <evalId>,<evalId>/<runId>   # leave out an eval, or one run known to be wrong
 ```
 
 - **Category.** `task.category` in the spec, free text. Use the classes of `~/.claude/model-matrix.md` (`fast`, `implementation`, `strong`): the report then prints the route that the matrix gives to that class next to the proposal. The category is not part of the cache key.

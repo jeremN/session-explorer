@@ -117,7 +117,7 @@ export async function main(argv: string[], deps: Deps = { diff: (args) => diffMa
 			if (!existsSync(options.watch)) return 0;
 			const state = readState(options.watch);
 			const changed = loadWatch(options.watch).filter((entry) => statusOf(entry, state[nameOf(entry)]) === 'changed');
-			if (changed.length) console.log(`eval:watch: ${changed.length} watched file(s) changed since their last measure (${changed.map((entry) => basename(entry.file)).join(', ')}). See npm run eval:watch.`);
+			if (changed.length) console.log(`eval:watch: ${changed.length} watched file(s) changed since their last measure (${changed.map((entry) => basename(entry.file)).join(', ')}). See pnpm eval:watch.`);
 		} catch {}
 		return 0;
 	}

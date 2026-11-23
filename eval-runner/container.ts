@@ -93,7 +93,7 @@ export async function imageProblem(exec: Exec, tag: string, docker = 'docker'): 
 		const reason = (server.stderr.trim().split('\n').pop() ?? '').slice(0, 200);
 		return `Docker does not answer${context ? ` (context ${context})` : ''}: ${reason || `exit code ${server.code}`}. Start it, or pick the context that holds the image: docker context use <name>, or DOCKER_CONTEXT=<name>.`;
 	}
-	return `The image ${tag} is missing. Build it with: npm run eval:image`;
+	return `The image ${tag} is missing. Build it with: pnpm eval:image`;
 }
 
 // opencode keeps its valid key in its background service, and its auth.json can still hold an expired key. When this
@@ -153,7 +153,7 @@ export async function removeContainer(exec: Exec, name: string, docker = 'docker
 // Docker names allow [a-zA-Z0-9_.-].
 export const containerName = (evalId: string, runId: string) => `eval-runner-${evalId}-${runId}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
 
-// npm run eval:image: builds the image under the tag the runner expects.
+// pnpm eval:image: builds the image under the tag the runner expects.
 if (import.meta.main) {
 	const { spawnSync } = await import('node:child_process');
 	const tag = imageTag();
