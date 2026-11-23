@@ -13,7 +13,7 @@ import { runCheck } from './check.ts';
 import { startServices, stopServices } from './services.ts';
 import type { Services } from './services.ts';
 import { setupFiles } from './command.ts';
-import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageProblem, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
+import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageArgs, imageProblem, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
@@ -107,7 +107,7 @@ const networkFor = (config: Config, name: string): Network => networkOf(name, al
 function invocationOf(config: Config, context: { sessionId: string; perRunUsd: number; runDir: string; opencodeVersion?: string; serviceEnv?: Record<string, string>; serviceNames?: string[] }, prompt: string, where: Where, options: Options): Started {
 	const serviceEnv = context.serviceEnv ?? {};
 	if (config.container) {
-		const bare = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK);
+		const bare = config.agent === 'codex' ? codexInvocation(config, `${HOME}/.codex`, prompt, 'danger-full-access') : opencodeInvocation(config, undefined, prompt, WORK, imageArgs().OPENCODE_VERSION);
 		const inner = { ...bare, env: { ...bare.env, ...serviceEnv } };
 		return containerize(inner, config.agent!, { noProxy: context.serviceNames, image: where.image, name: where.name, clone: where.clone, home: where.home, user: USER, network: networkFor(config, where.name), passEnv: [...(config.containerEnv ?? []), ...(config.agent === 'opencode' ? OPENCODE_KEY_ENVS : [])] }, options.docker);
 	}
