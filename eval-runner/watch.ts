@@ -27,7 +27,7 @@ watch.json: { "watch": [{ "file": "~/.claude/skills/tidy", "spec": "suites/tidy.
 `;
 
 export type Entry = { file: string; spec: string; config?: string; runs: number; maxRuns: number };
-type Saved = { hash: string; at: string; verdict?: string; evalDir?: string };
+type Saved = { hash: string; at: string; label?: string; verdict?: string; evalDir?: string };
 export type Status = 'missing' | 'new' | 'changed' | 'same';
 
 // The content of a file, or of every file of a directory with its relative path, in a stable order. `.git` is skipped.
@@ -169,7 +169,7 @@ export async function main(argv: string[], deps: Deps = { diff: (args) => diffMa
 			rmSync(join(store, name), { recursive: true, force: true });
 			mkdirSync(join(store, name), { recursive: true });
 			cpSync(entry.file, copy, { recursive: true });
-			state[name] = { hash: fingerprint(copy), at: deps.now().toISOString(), ...(verdict ? { verdict } : {}), ...(evalDir ? { evalDir } : {}) };
+			state[name] = { hash: fingerprint(copy), at: deps.now().toISOString(), label: labelOf(entry), ...(verdict ? { verdict } : {}), ...(evalDir ? { evalDir } : {}) };
 			writeState(options.watch, state);
 		};
 		if (status === 'new') {

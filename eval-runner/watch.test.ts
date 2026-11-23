@@ -82,6 +82,8 @@ test('a first --run keeps a copy without a measure; a change is listed with its 
 	assert.match(measured.out, /: worse\. Report:/);
 	// The measured version becomes the next "before", and the verdict stays in the list.
 	assert.equal(readFileSync(join(out, 'watch', skill, 'tidy', 'SKILL.md'), 'utf8'), 'v2\n');
+	// The state names the file, the task and the config for the viewer.
+	assert.match(JSON.parse(readFileSync(join(out, 'watch', 'state.json'), 'utf8'))[skill].label, /skills\/tidy on spec$/);
 	assert.match((await run(['--watch', watch])).out, new RegExp(`${skill} \\(.*\\): unchanged, last measure: worse`));
 });
 
