@@ -81,7 +81,7 @@ Without a `brain` section, only an unscoped qmd search counts as a knowledge-bas
 
 ## Eval runner
 
-`eval-runner/` runs one task under several agent configurations, N times each: Claude Code, Codex or opencode. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result.
+`eval-runner/` runs one task under several agent configurations, N times each: Claude Code, Codex or opencode. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result. It shows the pass rate, the share of tests that passed (a 27/28 run is not a 0/28 run), the checks that failed for an infra reason, the runs checked again, the hosts the network filter blocked, and the last verdict of each file that `pnpm eval:watch` follows.
 
 ```sh
 node eval-runner/run.ts eval-runner/examples/format-dollars.json --dry-run   # print the plan and the maximum spend

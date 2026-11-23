@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { metricCell, passPill, renderEval, renderEvalOptions, renderRuns } from '../session-explorer/viewer/evals.mjs';
+import { metricCell, passPill, renderEval, renderEvalOptions, renderRuns, renderWatch, testShares } from '../session-explorer/viewer/evals.mjs';
 
 const spread = (values: number[]) => {
 	const sorted = [...values].sort((a, b) => a - b);
@@ -98,3 +98,46 @@ test('the eval view names a non-Claude agent, shows a cost under a cent, and a r
 	assert.match(html, /0\.0025/);
 	assert.match(html, /—/);
 });
+
+test('the test share shows per run, per config and in the header; an infra failure is neither a pass nor a test count', () => {
+	const data = sample();
+	data.runs = [
+		run('baseline-1', 'baseline', { acceptance: { passed: false, tests: { passed: 27, total: 28 } } }),
+		run('baseline-2', 'baseline', { acceptance: { passed: false, exitCode: 3, infra: true, tests: { passed: 0, total: 28 } } }),
+		run('terse-1', 'terse', { acceptance: { passed: false, tests: { passed: 14, total: 28 } } })
+	];
+	const shares = testShares(data);
+	assert.deepEqual(shares.map((spread) => spread?.values), [[27 / 28], [0.5]]);
+	const html = renderEval(data);
+	const row = html.split('<th scope="row">Tests passés</th>')[1].split('</tr>')[0].split('<td');
+	assert.match(row[1], /data-best[^>]*><span class="ev-med">96 %/);
+	assert.match(row[2], /50 %/);
+	// 41 of 56 tests, the infra run left out.
+	assert.match(html, /Tests passés<\/dt><dd[^>]*>73 %/);
+	assert.match(html, /Échecs infra<\/dt><dd[^>]*>1</);
+	assert.match(html, /data-tone="warning"[^>]*>infra</);
+	assert.match(html, /27\/28/);
+});
+
+test('a rechecked run shows its earlier verdict, and a run with blocked hosts names them', () => {
+	const html = renderRuns({
+		runs: [run('a-1', 'a', { acceptance: { passed: true, tests: { passed: 28, total: 28 } }, rechecked: { at: '2026-11-22T10:00:00Z', previous: { passed: false, tests: { passed: 0, total: 28 } } }, blockedHosts: ['ab.chatgpt.com:443', '<x>:443'] })]
+	});
+	assert.match(html, /title="avant : échec 0\/28">revérifié</);
+	assert.match(html, /2 hôtes bloqués/);
+	assert.match(html, /title="ab\.chatgpt\.com:443, &lt;x&gt;:443"/);
+});
+
+test('the watch panel lists each watched file with its last verdict and a link to the measure', () => {
+	assert.equal(renderWatch({}), '');
+	const html = renderWatch({
+		'CLAUDE.md-1': { hash: 'h', at: '2026-11-22T10:00:00Z', label: '~/repo/CLAUDE.md on task/sonnet', verdict: 'worse', evalDir: '/x/out/20261122-100000-task-diff' },
+		'AGENTS.md-2': { hash: 'h', at: '2026-11-22T10:00:00Z' }
+	});
+	assert.match(html, /~\/repo\/CLAUDE\.md on task\/sonnet/);
+	assert.match(html, /data-tone="negative"[^>]*>moins bien</);
+	assert.match(html, /href="#evals\/20261122-100000-task-diff"/);
+	// A file with a first copy and no measure yet: its name, no link.
+	assert.match(html, /AGENTS\.md-2.*copie seule/);
+});
+

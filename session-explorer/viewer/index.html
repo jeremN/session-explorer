@@ -268,7 +268,7 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
 <script type="module">
 import { adapt, esc } from './adapt.mjs';
 import { pill, stat, wireSeg } from './ui.mjs';
-import { renderEval, renderEvalOptions } from './evals.mjs';
+import { renderEval, renderEvalOptions, renderWatch } from './evals.mjs';
 document.querySelectorAll('.seg').forEach(wireSeg);
 const $=s=>document.querySelector(s);
 const pad=n=>String(n).padStart(2,'0');
@@ -844,6 +844,7 @@ function renderWaste(){
   });
 }
 /* ---------- evals view ---------- */
+let WATCH=null;
 async function loadEvals(){
   const seq=++evSeq,body=$('#evBody');
   if(!EVALS){
@@ -853,10 +854,14 @@ async function loadEvals(){
       EVALS=(await r.json()).evals;
     }catch{EVALS=[]}
   }
+  // eval:watch keeps its verdicts next to the evals. No list: no panel.
+  if(WATCH===null){
+    try{const r=await fetch('evals/watch/state.json');WATCH=r.ok?renderWatch(await r.json()):''}catch{WATCH=''}
+  }
   if(seq!==evSeq)return;
   if(!EVALS.length){
     $('#evPick').hidden=true;
-    body.innerHTML='<p class="wsum">Aucune évaluation. Lancez : node eval-runner/run.ts &lt;spec.json&gt;</p>';
+    body.innerHTML=WATCH+'<p class="wsum">Aucune évaluation. Lancez : pnpm eval &lt;spec.json&gt;</p>';
     return;
   }
   const id=EVALS.some(e=>e.id===EVAL_ID)?EVAL_ID:EVALS[0].id;
@@ -867,7 +872,7 @@ async function loadEvals(){
     if(!r.ok)throw new Error(r.status);
     const data=await r.json();
     if(seq!==evSeq)return;
-    body.innerHTML=renderEval(data);
+    body.innerHTML=WATCH+renderEval(data);
   }catch{
     if(seq!==evSeq)return;
     body.innerHTML='<p class="wsum">Évaluation illisible : evals/'+esc(id)+'/eval.json</p>';
