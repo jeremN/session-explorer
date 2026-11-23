@@ -119,3 +119,9 @@ test('opencodeOutcome: an error event, or no step with reason stop, is an error'
 	const cut = opencodeOutcome(lines(opencodeEvents.slice(0, 4)), { prompt: 'x', start: START });
 	assert.equal(cut.isError, true);
 });
+
+test('codex gets its effort as a quoted TOML value', () => {
+	const { args } = codexInvocation({ name: 'a', agent: 'codex', model: 'gpt-x', effort: 'high' }, '/h', 'Fix it.');
+	assert.deepEqual(args.slice(-3), ['-c', 'model_reasoning_effort="high"', '-']);
+});
+

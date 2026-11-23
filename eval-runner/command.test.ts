@@ -100,3 +100,9 @@ test('setupFiles lists the CLAUDE.md source and the skill directories for the se
 test('S3: the agent environment disables every git transport', () => {
 	assert.deepEqual(buildCommand({ name: 'a' }, context).env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'protocol.allow', GIT_CONFIG_VALUE_0: 'never' });
 });
+
+test('effort goes to --effort, after the model', () => {
+	const { args } = buildCommand({ name: 'a', model: 'sonnet', effort: 'high' }, context);
+	assert.deepEqual(args.slice(ALWAYS.length + 2, ALWAYS.length + 6), ['--model', 'sonnet', '--effort', 'high']);
+});
+

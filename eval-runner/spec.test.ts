@@ -172,3 +172,13 @@ test('task.setup: a command with a default timeout of 600 s', () => {
 	failure({ ...base(), task: { ...base().task, setup: { command: '' } } }, 'spec.task.setup.command');
 	failure({ ...base(), task: { ...base().task, setup: { command: 'x', other: 1 } } }, 'spec.task.setup.other');
 });
+
+test('effort is checked against the levels of the agent, and opencode names its variant in the model', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.equal(validateSpec(withConfig({ effort: 'max' }), '/s').configs[0].effort, 'max');
+	assert.equal(validateSpec(withConfig({ agent: 'codex', effort: 'xhigh' }), '/s').configs[0].effort, 'xhigh');
+	failure(withConfig({ effort: 'huge' }), 'configs[0].effort');
+	failure(withConfig({ agent: 'codex', effort: 'max' }), 'configs[0].effort');
+	failure(withConfig({ agent: 'opencode', sandbox: false, effort: 'high' }), 'provider/model#variant');
+});
+

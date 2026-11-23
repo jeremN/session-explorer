@@ -35,6 +35,7 @@ export function buildCommand(config: Config, context: Context, readText: (path: 
 	args.push('--permission-mode', config.permissionMode ?? 'auto');
 	if (config.bare) args.push('--bare');
 	if (config.model) args.push('--model', config.model);
+	if (config.effort) args.push('--effort', config.effort);
 	if (config.appendSystemPrompt) args.push('--append-system-prompt', config.appendSystemPrompt);
 	if (config.sandbox) args.push('--settings', generated('settings.json', withSandbox(config.settings, readText)));
 	else if (config.settings !== undefined) args.push('--settings', generated('settings.json', config.settings));
