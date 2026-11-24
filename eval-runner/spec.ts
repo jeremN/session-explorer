@@ -11,7 +11,7 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const AGENT_NAMES = ['claude', 'codex', 'opencode'] as const;
 export type AgentName = (typeof AGENT_NAMES)[number];
 // These fields drive the Claude Code CLI. The other agents have no such option.
-const CLAUDE_ONLY = ['appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare'] as const;
+const CLAUDE_ONLY = ['userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare'] as const;
 export const EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] } as const;
 export type Effort = (typeof EFFORTS.claude)[number];
 
@@ -32,6 +32,9 @@ export type Config = {
 	// flag: it names a variant in the model, provider/model#variant.
 	effort?: Effort;
 	claudeMd?: { text: string } | { file: string };
+	// Plays the user CLAUDE.md (~/.claude/CLAUDE.md): Claude Code reads it in addition to the CLAUDE.md of the project.
+	// The runs read no user memory, so the runner writes it as CLAUDE.local.md in the clone.
+	userClaudeMd?: { text: string } | { file: string };
 	appendSystemPrompt?: string;
 	settings?: Record<string, unknown> | string;
 	skills?: string[];
@@ -167,7 +170,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
+		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -175,10 +178,11 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		const result: Config = { name: configName };
 		const model = optional(config.model, `${at}.model`, string);
 		if (model !== undefined) result.model = model;
-		if (config.claudeMd !== undefined && config.claudeMd !== null) {
-			const md = object(config.claudeMd, `${at}.claudeMd`, ['text', 'file']);
-			if ((md.text === undefined) === (md.file === undefined)) fail(`${at}.claudeMd`, 'set exactly one of text and file');
-			result.claudeMd = md.text !== undefined ? { text: string(md.text, `${at}.claudeMd.text`) } : { file: resolve(dir, string(md.file, `${at}.claudeMd.file`)) };
+		for (const key of ['claudeMd', 'userClaudeMd'] as const) {
+			if (config[key] === undefined || config[key] === null) continue;
+			const md = object(config[key], `${at}.${key}`, ['text', 'file']);
+			if ((md.text === undefined) === (md.file === undefined)) fail(`${at}.${key}`, 'set exactly one of text and file');
+			result[key] = md.text !== undefined ? { text: string(md.text, `${at}.${key}.text`) } : { file: resolve(dir, string(md.file, `${at}.${key}.file`)) };
 		}
 		const append = optional(config.appendSystemPrompt, `${at}.appendSystemPrompt`, string);
 		if (append !== undefined) result.appendSystemPrompt = append;

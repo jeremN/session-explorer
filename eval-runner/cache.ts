@@ -27,8 +27,10 @@ function contentOf(path: string): string {
 export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task: Spec['task']; baseSha: string; config: Record<string, unknown>; cliVersion: string; specDir: string }) {
 	const { name: _name, ...rest } = config;
 	const files: Record<string, unknown> = { ...rest };
-	const claudeMd = rest.claudeMd as { file?: string } | undefined;
-	if (claudeMd?.file) files.claudeMd = { content: contentOf(claudeMd.file) };
+	for (const field of ['claudeMd', 'userClaudeMd'] as const) {
+		const md = rest[field] as { file?: string } | undefined;
+		if (md?.file) files[field] = { content: contentOf(md.file) };
+	}
 	for (const field of ['settings', 'mcpConfig'] as const) if (typeof rest[field] === 'string') files[field] = { content: contentOf(rest[field] as string) };
 	for (const field of ['skills', 'plugins'] as const) if (Array.isArray(rest[field])) files[field] = (rest[field] as string[]).map((path) => contentOf(path));
 	const prompt = task.prompt ?? (task.promptFile ? contentOf(task.promptFile) : '');
