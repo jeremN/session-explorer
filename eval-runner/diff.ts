@@ -5,7 +5,7 @@
 // --before names a saved copy of the file (or of the skill directory, under the same directory name) that replaces the
 // version at HEAD: for a file outside git, such as ~/.claude/CLAUDE.md. eval:watch keeps these copies.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
@@ -24,7 +24,9 @@ const USAGE = `Usage: node eval-runner/diff.ts <spec.json> --file <path> [--befo
   --max-runs N   runs per side at most, when the result stays borderline (default 10)
 `;
 
-export type Target = { kind: 'claudeMd' | 'skill'; path: string; head: string | undefined };
+// userMd: a CLAUDE.md from outside the task repository (~/.claude/CLAUDE.md). Claude Code reads it with the CLAUDE.md
+// of the project, so it does not replace that file: it becomes the userClaudeMd of the config.
+export type Target = { kind: 'claudeMd' | 'userMd' | 'skill'; path: string; head: string | undefined };
 export type Verdict = 'same' | 'better' | 'worse' | 'borderline';
 // A run is rounded to the cent and the share to the hundredth. A gap under 10 % of the median, or under this floor, is
 // noise even when it leaves the range: three identical runs give a range of one value.
@@ -53,11 +55,12 @@ export function compare(before: ConfigStats, after: ConfigStats): { verdict: Ver
 
 // The two configs of a diff. A skill replaces the skill of the template that has the same directory name.
 export function diffConfigs(template: Config, target: Target): [Config, Config] {
-	if (target.kind === 'claudeMd') {
-		const { claudeMd: _claudeMd, ...rest } = template;
+	if (target.kind === 'claudeMd' || target.kind === 'userMd') {
+		const field = target.kind === 'claudeMd' ? 'claudeMd' : 'userClaudeMd';
+		const { [field]: _old, ...rest } = template;
 		return [
-			{ ...rest, name: 'before', ...(target.head === undefined ? {} : { claudeMd: { text: target.head } }) },
-			{ ...rest, name: 'after', claudeMd: { file: target.path } }
+			{ ...rest, name: 'before', ...(target.head === undefined ? {} : { [field]: { text: target.head } }) },
+			{ ...rest, name: 'after', [field]: { file: target.path } }
 		];
 	}
 	const others = (template.skills ?? []).filter((path) => basename(path) !== basename(target.path));
@@ -85,6 +88,14 @@ export async function headVersion(exec: Exec, path: string, work: string): Promi
 	const unpacked = await exec('tar', ['-xf', archive, '-C', work]);
 	if (unpacked.code !== 0) throw new Error(`tar failed: ${unpacked.stderr.trim()}`);
 	return { ...target, head: join(work, rel) };
+}
+
+// A CLAUDE.md outside the task repository is a user CLAUDE.md for a Claude config. codex and opencode get no such file
+// in the runs: for them it stays the instruction file of the clone.
+export function asUserMd(target: Target, repo: string, template: Config): Target {
+	if (target.kind !== 'claudeMd' || template.agent) return target;
+	const inside = relative(realpathSync(repo), target.path);
+	return inside.startsWith('..') || isAbsolute(inside) ? { ...target, kind: 'userMd' } : target;
 }
 
 // A saved copy as the version before the change. A skill copy must have the directory name of the skill: the runner
@@ -161,8 +172,9 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	mkdirSync(options.out, { recursive: true });
 	const work = mkdtempSync(join(options.out, '.diff-'));
 	try {
-		const target = options.before ? savedVersion(options.file, options.before) : await headVersion(exec, options.file, join(work, 'head'));
-		if (target.kind === 'claudeMd' && target.head === readFileSync(target.path, 'utf8')) {
+		const found = options.before ? savedVersion(options.file, options.before) : await headVersion(exec, options.file, join(work, 'head'));
+		const target = asUserMd(found, spec.task.repo, template);
+		if (target.kind !== 'skill' && target.head === readFileSync(target.path, 'utf8')) {
 			console.log(`${options.file}: no change against ${options.before ? 'the version before' : 'HEAD'}.`);
 			return 0;
 		}

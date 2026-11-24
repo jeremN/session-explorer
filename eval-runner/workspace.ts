@@ -7,7 +7,8 @@ import type { Exec } from './exec.ts';
 import type { Config } from './spec.ts';
 
 // `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
-type Setup = { claudeMd: Config['claudeMd']; skills: string[]; instructionFile?: string };
+// `localMd` becomes CLAUDE.local.md: Claude Code reads it with the CLAUDE.md of the project, as a user CLAUDE.md.
+type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
@@ -81,11 +82,12 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	await git(exec, dir, ['checkout', '-q', '--detach', baseSha]);
 	// FETCH_HEAD names the path of the source repository.
 	rmSync(join(dir, '.git', 'FETCH_HEAD'), { force: true });
-	if (setup.claudeMd) {
+	const instructions: [string, Config['claudeMd']][] = [[setup.instructionFile ?? 'CLAUDE.md', setup.claudeMd], ['CLAUDE.local.md', setup.localMd]];
+	for (const [file, md] of instructions) {
+		if (!md) continue;
 		// Remove first: writeFileSync would follow a symlink and write outside the clone.
-		const file = setup.instructionFile ?? 'CLAUDE.md';
 		rmSync(join(dir, file), { force: true });
-		writeFileSync(join(dir, file), 'text' in setup.claudeMd ? setup.claudeMd.text : readFileSync(setup.claudeMd.file, 'utf8'));
+		writeFileSync(join(dir, file), 'text' in md ? md.text : readFileSync(md.file, 'utf8'));
 	}
 	for (const skill of setup.skills) {
 		const target = `.claude/skills/${basename(skill)}`;
@@ -97,6 +99,8 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	}
 	// The diff of the run is measured against this commit, so the configuration files never count as agent work.
 	await git(exec, dir, ['add', '-A']);
+	// A repository can ignore CLAUDE.local.md. It belongs to the setup commit anyway, not to the diff of the agent.
+	if (setup.localMd) await git(exec, dir, ['add', '-f', 'CLAUDE.local.md']);
 	await git(exec, dir, [...AUTHOR, 'commit', '--allow-empty', '-q', '-m', 'eval-runner setup']);
 	// A push from the clone has nowhere to go, and this hook stops one anyway.
 	const hooks = join(dir, '.git', 'hooks');

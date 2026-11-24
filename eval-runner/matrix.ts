@@ -26,7 +26,7 @@ const meanOfTasks = (shares: Map<string, number[]>) => Math.round(mean([...share
 // A route needs this many runs in a category before it can be proposed.
 export const MIN_RUNS = 3;
 // These fields change what the agent is told. Such a config is an experiment on the instructions, not a route.
-const EXPERIMENT_FIELDS = ['claudeMd', 'appendSystemPrompt', 'skills', 'plugins'] as const;
+const EXPERIMENT_FIELDS = ['claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'skills', 'plugins'] as const;
 
 // The effort is part of the route: sonnet at high effort is another route than sonnet at the default effort.
 export const routeOf = (config: Config) => `${config.agent ?? 'claude'}/${config.model ?? 'default'}${config.effort ? `@${config.effort}` : ''}`;

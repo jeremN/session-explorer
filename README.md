@@ -129,7 +129,7 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 
 `pnpm eval:diff <spec.json> --file <path> [--config <name>] [--runs 3] [--max-runs 10]` runs the task of the spec twice per round: `before` gets the file as it is at `HEAD`, `after` gets the working tree. Both start from the first config of the spec (or `--config`).
 
-- A file (`CLAUDE.md`, `AGENTS.md`) becomes the CLAUDE.md of the clone. A directory is a skill: it replaces the skill of the config with the same directory name.
+- A file (`CLAUDE.md`, `AGENTS.md`) of the task repository becomes the CLAUDE.md of the clone. A CLAUDE.md from outside the task repository (`~/.claude/CLAUDE.md`) is a user CLAUDE.md: for a Claude config it becomes `userClaudeMd` and keeps the CLAUDE.md of the project, as in a real session. A directory is a skill: it replaces the skill of the config with the same directory name.
 - Verdict: `same` when the pass counts are equal, `better` or `worse` when the gap is half the runs or more, `borderline` otherwise. A borderline result gets more runs (3, then 6, then 10). The cache reuses the earlier runs, so a round pays only for the new ones.
 - A metric is flagged when its median after the change is outside the range of the `before` runs and the gap is more than 10 % of the `before` median (and more than 0.01 $ for a cost, 0.02 for a share, 1 s for a duration).
 - For a skill, the report also lists how many times the skill loaded in each run. A skill that never loads cannot help.
@@ -178,6 +178,7 @@ A field that is absent keeps the CLI default.
 | `model` | `--model <value>` |
 | `effort` | `--effort <level>`: `low`, `medium`, `high`, `xhigh` or `max`. Unset: Claude Code in print mode sends `medium` (see `output_config.effort` in the transcript). Codex takes `-c model_reasoning_effort="<level>"`, from `low` to `xhigh`. opencode has no flag: name a variant in the model, `provider/model#variant`. The effort is part of the route of the routing table: `claude/sonnet@high` |
 | `claudeMd` (`{ "text" }` or `{ "file" }`) | `CLAUDE.md` of the clone, committed in the setup commit |
+| `userClaudeMd` (`{ "text" }` or `{ "file" }`) | plays your `~/.claude/CLAUDE.md`. The runs read no user memory (`--setting-sources project,local`), so it becomes `CLAUDE.local.md` in the clone: Claude Code reads it with the `CLAUDE.md` of the project. Claude Code only |
 | `appendSystemPrompt` | `--append-system-prompt <value>` |
 | `settings` (object or file) | `<run>/settings.json`, passed as `--settings`. Put hooks here. |
 | `skills` (directories) | Copied to `.claude/skills/<name>/` in the clone, committed in the setup commit |
@@ -284,7 +285,7 @@ pnpm eval:matrix --exclude <evalId>,<evalId>/<runId>   # leave out an eval, or o
 
 - **Category.** `task.category` in the spec, free text. Use the classes of `~/.claude/model-matrix.md` (`fast`, `implementation`, `strong`): the report then prints the route that the matrix gives to that class next to the proposal. The category is not part of the cache key.
 - **Task.** The base commit, the prompt and the acceptance command. A spec with `base: HEAD` gives a new task each time the branch moves: pin the base of a suite task to a commit.
-- **Route.** `agent/model`. A config that changes what the agent is told (`claudeMd`, `appendSystemPrompt`, `skills`, `plugins`) is an experiment, not a route: it is left out. A run with status `error` and no billed token is left out too: the runner or the CLI start failed, and the agent never worked. An `error` after the agent worked (it stopped partway) and a `timeout` count as failures, even when the check passes. A run reused from the cache counts once.
+- **Route.** `agent/model`. A config that changes what the agent is told (`claudeMd`, `userClaudeMd`, `appendSystemPrompt`, `skills`, `plugins`) is an experiment, not a route: it is left out. A run with status `error` and no billed token is left out too: the runner or the CLI start failed, and the agent never worked. An `error` after the agent worked (it stopped partway) and a `timeout` count as failures, even when the check passes. A run reused from the cache counts once.
 - **Tests passed.** When the acceptance command is a test run (vitest, node:test or jest), the runner records how many tests passed in `acceptance.tests`. The column gives the mean share per task, then the mean of the tasks, so each task weighs the same. It tells a near miss (19 tests of 21) from a run that missed the task (10 of 21), where the pass rate sees two failures. It does not change the proposal.
 - **Proposal.** Among the routes with 3 runs or more, the cheapest one whose pass rate is within one run of the best. A route with no cost (Codex without `price`) comes last.
 - **Tasks that tell no route apart.** Two routes or more ran the task, and all pass or all fail. Such a task costs runs and moves no proposal. When no task of a category tells the routes apart, the report says that the cost decides alone.

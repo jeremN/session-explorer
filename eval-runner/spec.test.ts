@@ -182,3 +182,10 @@ test('effort is checked against the levels of the agent, and opencode names its 
 	failure(withConfig({ agent: 'opencode', sandbox: false, effort: 'high' }), 'provider/model#variant');
 });
 
+test('userClaudeMd takes a text or a file, and only Claude Code reads it', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.deepEqual(validateSpec(withConfig({ userClaudeMd: { file: 'mine.md' } }), '/specs/demo').configs[0].userClaudeMd, { file: '/specs/demo/mine.md' });
+	failure(withConfig({ userClaudeMd: { text: 'a', file: 'b' } }), 'configs[0].userClaudeMd');
+	failure(withConfig({ agent: 'codex', userClaudeMd: { text: 'a' } }), 'configs[0].userClaudeMd');
+});
+

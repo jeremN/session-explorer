@@ -371,3 +371,16 @@ test('S3: the clone has a pre-push hook, and a push to a local path fails under 
 	assert.doesNotMatch(await git(repo, 'branch', '--list'), /leak/);
 	await removeWorkspace(dir);
 });
+
+test('a user CLAUDE.md becomes CLAUDE.local.md in the setup commit, next to the CLAUDE.md of the project', async () => {
+	const dir = join(root, 'clones', 'local-md');
+	const gitDir = gitDirOf('local-md');
+	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: base, dir, gitDir, setup: { claudeMd: { text: 'project\n' }, localMd: { text: 'mine\n' }, skills: [] } });
+	assert.equal(readFileSync(join(dir, 'CLAUDE.local.md'), 'utf8'), 'mine\n');
+	assert.equal(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), 'project\n');
+	assert.match(await git(dir, 'show', '--name-only', '--format=', setupSha), /CLAUDE\.local\.md/);
+	const diff = await collectDiff(realExec, dir, setupSha, gitDir);
+	assert.equal(diff.files, 0);
+	await removeWorkspace(dir);
+});
+

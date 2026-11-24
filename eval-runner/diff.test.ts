@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { compare, diffConfigs, headVersion, main, savedVersion } from './diff.ts';
+import { asUserMd, compare, diffConfigs, headVersion, main, savedVersion } from './diff.ts';
 import { realExec } from './exec.ts';
 import type { ConfigStats } from './stats.ts';
 
@@ -128,3 +128,25 @@ test('savedVersion: a saved copy replaces HEAD, for a file outside git; a skill 
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test('a CLAUDE.md outside the task repository becomes the user CLAUDE.md of a Claude config, and keeps the project one', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'eval-diff-user-'));
+	try {
+		mkdirSync(join(dir, 'repo'));
+		mkdirSync(join(dir, 'home'));
+		const repo = realpathSync(join(dir, 'repo'));
+		const inside = { kind: 'claudeMd' as const, path: join(repo, 'CLAUDE.md'), head: 'old\n' };
+		const outside = { kind: 'claudeMd' as const, path: join(realpathSync(join(dir, 'home')), 'CLAUDE.md'), head: 'old\n' };
+		assert.equal(asUserMd(inside, repo, { name: 'a' }).kind, 'claudeMd');
+		assert.equal(asUserMd(outside, repo, { name: 'a' }).kind, 'userMd');
+		// codex and opencode read no user CLAUDE.md in the runs: the file stays their instruction file.
+		assert.equal(asUserMd(outside, repo, { name: 'a', agent: 'codex' }).kind, 'claudeMd');
+		const template = { name: 'a', model: 'sonnet', claudeMd: { text: 'project rules\n' } };
+		const [before, after] = diffConfigs(template, { ...outside, kind: 'userMd' });
+		assert.deepEqual(before, { name: 'before', model: 'sonnet', claudeMd: { text: 'project rules\n' }, userClaudeMd: { text: 'old\n' } });
+		assert.deepEqual(after, { name: 'after', model: 'sonnet', claudeMd: { text: 'project rules\n' }, userClaudeMd: { file: outside.path } });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
