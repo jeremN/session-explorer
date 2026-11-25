@@ -47,6 +47,7 @@ Merge requests created: 40 in 15 sessions. These sessions cost 350 dollars (35 %
 | `node context-tracer/tracer.ts [--json]` | Print the knowledge-base verdicts per week |
 | `node hook-heartbeat/heartbeat.ts [--json]` | Tell, for each configured hook, when it last fired and whether it looks dead |
 | `node eval-runner/run.ts <spec.json> [--dry-run]` | Run one task under several configurations (see [Eval runner](#eval-runner)) |
+| `node eval-runner/grade.ts <evalDir>` | Grade the diff of each run of an eval (see [Grade the diffs](#grade-the-diffs)) |
 | `node --test` | Run the test suite |
 
 All three scripts take `--days N` (default 30, 14 for the heartbeat) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
@@ -89,9 +90,9 @@ node eval-runner/run.ts eval-runner/examples/format-dollars.json             # r
 node session-explorer/build.ts --serve                                        # then open the "Évaluations" view
 ```
 
-Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
+Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--no-grade] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 
-The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money.
+The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money. A command grader is the exception: it is your own command, and it can call a model too (see [Grade the diffs](#grade-the-diffs)).
 
 ### Spec
 
@@ -108,12 +109,16 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 | `task.acceptance.timeoutSec` | Default 300. |
 | `task.hiddenTests` | Optional `{ commit, paths }`. The runner copies these files from `commit` in `task.repo` into the clone after the agent stops and after the diff, then runs the acceptance command. Use it for a task mined from a past session: `commit` is the solution, `paths` are its tests. |
 | `budget.perRunUsd`, `budget.perEvalUsd` | Both required. |
+| `budget.gradersUsd` | Optional. The budget of the command graders, apart from the budget of the agents. See [Grade the diffs](#grade-the-diffs). |
 | `runs` | Runs per configuration, 1 to 20. Default 3. |
 | `configs` | 1 to 8 configurations with unique names. |
+| `graders` | Optional. The graders of every run of the eval. See [Grade the diffs](#grade-the-diffs). |
 
 ### Cache
 
 A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, spec folder (`EVAL_SPEC_DIR`), hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
+
+A grade goes to `eval-runner/out/cache/grades/`. See [Grade the diffs](#grade-the-diffs).
 
 ### Check a run again
 
@@ -124,6 +129,59 @@ A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. T
 - `--spec` takes the acceptance command, the hidden tests and the category of that spec. It must name the same task (same repo, base and prompt). The cached copies of the rechecked runs then go: they belong to the old cache key. Without `--spec`, the cached copies get the new acceptance.
 
 `task.acceptance.infraExitCode` (2 to 255) names the exit code by which the acceptance command says that it failed before it judged the agent, for example a database that did not start. Such a run gets `acceptance.infra`, and the routing table leaves it out.
+
+### Grade the diffs
+
+The acceptance check tells pass from fail. When every config passes, it does not tell the configs apart. A grader judges the diff of each run: it gives findings, such as a review comment or a broken team rule. After the runs, the runner grades every run with the `graders` of the spec. `--no-grade` skips this step.
+
+`node eval-runner/grade.ts <evalDir> [--graders <name>[,<name>]] [--runs <id>[,<id>]] [--spec <spec.json>] [--force]` (or `pnpm eval:grade`) grades the runs of a saved eval.
+
+- `--graders` and `--runs` limit the pass to these graders and runs. The other grades stay.
+- `--spec` takes the graders and `budget.gradersUsd` of that spec. It must name the same task (same repo, base and prompt). Use it on an eval that ran before its spec had graders. `eval.json` keeps the graders of that spec, by name.
+- `--force` runs every grader again, even when the grade cache holds its result.
+- Exit codes: 0 done, 1 a grade has the status `error`, 2 invalid arguments.
+
+```json
+"graders": [
+  { "name": "review", "kind": "command", "command": "node \"$EVAL_SPEC_DIR/graders/review.mjs\"", "timeoutSec": 1800 },
+  { "name": "rules", "kind": "pattern",
+    "rules": [{ "name": "no-as-cast", "pattern": "\\bas [A-Z]\\w+", "paths": "\\.ts$", "severity": "minor" }],
+    "require": [{ "name": "changeset", "paths": "^\\.changeset/.+\\.md$", "severity": "important" }] }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | Slug, `[a-z0-9-]+`, unique in the spec. The grade of the run goes to `grades.<name>`. |
+| `kind` | `command` or `pattern`. |
+| `command` | A command grader: the shell command. It runs in the clone, so keep the script next to the spec and name it with `$EVAL_SPEC_DIR`. |
+| `timeoutSec` | A command grader: the time limit. Default 1800. |
+| `blind` | A command grader: default `true`. See below. |
+| `rules` | A pattern grader: `{ name, pattern, paths?, severity }`. `pattern` and `paths` are regular expressions. |
+| `require` | A pattern grader: `{ name, paths, severity }`. |
+
+The runner grades a run with the status `ok` or `timeout` and a diff that is not empty. The other runs get a grade with the status `skipped`. The grades go in a shuffled order, so a grader meets the configs interleaved. A progress line names the grade id and the grader, never the config. The summary at the end gives, per config and grader, the runs with findings out of the graded runs.
+
+**Command grader.** For each run, the runner makes a new clone at the base: the setup files of the config, the setup command, then `diff.patch`. The hidden tests do not enter. The command runs in the clone with these variables:
+
+| Variable | Value |
+|---|---|
+| `EVAL_GRADE_ID` | A random id of 8 hex characters. The grade keeps it as `id`, so a report of the grader links back to the run. |
+| `EVAL_BASE` | The SHA of the base commit. |
+| `EVAL_DIFF` | The absolute path of a copy of `diff.patch`, named by the grade id. |
+| `EVAL_SPEC_DIR` | The spec folder. |
+
+The command prints one JSON object on stdout: `{ "findings": [{ "severity": "...", "summary": "...", "file"?: "...", "line"?: 12, "rule"?: "..." }], "costUsd"?: 0.42 }`. Invalid JSON or a non-zero exit code gives the status `error` and a `note`. A command over its time limit gives the status `timeout`. The stdout and the stderr go to `runs/<runId>/grade-<name>.log`. The runner removes the clone and the copy of the patch after the grade.
+
+**Blind mode.** A blind grader never gets the config name or the run id: not in its working directory, the path of the patch or the environment. With `"blind": false`, it also gets `EVAL_CONFIG` and `EVAL_RUN_ID`. The clone of a blind grader holds the base commit and the task setup, never the files of the config (its CLAUDE.md, its skills, `remove`, `files`). Every diff is then judged against the same instruction files. A diff that changes a file of the config setup does not apply on the base: its grade has the status `error`. A grader with `"blind": false` gets the clone of the config.
+
+**Pattern grader.** No clone and no process. The runner reads the added lines of `diff.patch`. Each `rules` entry gives one finding per added line that its `pattern` matches, in a file that its `paths` matches (default: every file). The finding names the file, the line number in the new file and the trimmed line, 200 characters at most. Each `require` entry gives one finding when no changed file matches its `paths`. A deleted file does not count.
+
+**Budget.** `budget.gradersUsd` caps the cost of the command graders in one pass. The cost of a grade is the `costUsd` that its command prints, 0 when it prints none. When the sum of the costs reaches the cap, the remaining command grades get the status `budget`. Pattern graders cost nothing.
+
+**Cache.** An `ok` command grade goes to `eval-runner/out/cache/grades/`. A later pass reuses it when the diff, the grader, the base commit and the spec folder are the same (and the config, for a grader that is not blind). A reused grade has `cached: true` and costs nothing. The script of the command does not count: after you change it, pass `--force`.
+
+Each grade has `status` (`ok`, `error`, `timeout`, `budget` or `skipped`), `findings`, and when known `id`, `costUsd`, `durationMs`, `note` and `cached`. Per config, `eval.json` adds `grades.<name>`: `graded` (the runs with an `ok` grade), `withFindings`, `findings` and `bySeverity`. The "Comparaison" panel of the viewer shows one row per grader: the runs with findings out of the graded runs.
 
 ### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
 
@@ -332,13 +390,14 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 
 | Path | Content |
 |---|---|
-| `eval.json` | Spec, base SHA, CLI version, runs with their metrics, and the median, min, max and pass rate per configuration. |
+| `eval.json` | Spec, base SHA, CLI version, runs with their metrics and grades, and the median, min, max, pass rate and grade counts per configuration. |
 | `runs/<runId>/claude.json` | The CLI result (Claude Code). |
 | `runs/<runId>/events.jsonl` | The raw JSON events (Codex, opencode). |
 | `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. For Codex and opencode, the transcript built from the events. |
 | `runs/<runId>/session.json` | The session file of the viewer. |
 | `runs/<runId>/diff.patch` | The final diff against the setup commit. |
 | `runs/<runId>/acceptance.log` | The last 64 KB of the acceptance output. |
+| `runs/<runId>/grade-<name>.log` | The stdout and the stderr of the command grader `<name>`. |
 | `eval-runner/out/index.json` | The list of evals. |
 
 > **Warning:** the output holds your transcripts and the agent diffs. Do not commit or share it.

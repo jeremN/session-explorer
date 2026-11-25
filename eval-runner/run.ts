@@ -1,5 +1,5 @@
 // Eval runner: runs one task under several Claude Code configurations, N times each, and scores every run.
-// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
+// Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--no-grade] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 // Exit codes: 0 done (or --help, or a dry run), 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 import { randomUUID } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -20,11 +20,12 @@ import type { Exec } from './exec.ts';
 import { scoreFiles, scoreRun } from './score.ts';
 import { SpecError, loadSpec } from './spec.ts';
 import type { AgentName, Config, Spec } from './spec.ts';
+import { gradeRuns } from './grade.ts';
 import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
 import { collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
-const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
+const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--no-grade] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 
   <spec.json>   the eval spec: one task, the configurations, the run count
   --dry-run     validate the spec and print the planned runs. Starts no agent and writes nothing.
@@ -32,6 +33,7 @@ const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N]
   --only a,b    run only these configurations
   --keep        keep the clone of every run
   --no-cache    run every run, even when a finished run with the same task, config and CLI version exists
+  --no-grade    do not run the graders of the spec after the runs. eval-runner/grade.ts runs them later.
   --claude P    the claude executable (default: claude)
   --codex P     the codex executable (default: codex)
   --opencode P  the opencode executable (default: opencode)
@@ -40,10 +42,10 @@ const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N]
   --spec-dir D  the value of EVAL_SPEC_DIR (default: the folder of the spec file). eval diff sets it.
 `;
 
-type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; bin: Record<AgentName, string>; docker: string; out: string; specDir?: string };
+type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; noGrade: boolean; bin: Record<AgentName, string>; docker: string; out: string; specDir?: string };
 
 function parseArgs(argv: string[]): Options | 'help' {
-	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, bin: { claude: 'claude', codex: 'codex', opencode: 'opencode' }, docker: 'docker', out: join(import.meta.dirname, 'out') };
+	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, noGrade: false, bin: { claude: 'claude', codex: 'codex', opencode: 'opencode' }, docker: 'docker', out: join(import.meta.dirname, 'out') };
 	for (let index = 0; index < argv.length; index++) {
 		const flag = argv[index];
 		const value = () => {
@@ -55,6 +57,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 		else if (flag === '--dry-run') options.dryRun = true;
 		else if (flag === '--keep') options.keep = true;
 		else if (flag === '--no-cache') options.noCache = true;
+		else if (flag === '--no-grade') options.noGrade = true;
 		else if (flag === '--runs') {
 			options.runs = Number(value());
 			if (!Number.isInteger(options.runs) || options.runs < 1 || options.runs > 20) throw new SpecError('--runs: required integer from 1 to 20');
@@ -312,7 +315,8 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
 	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
-	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
+	// A reused run carries no grade: recheck.ts copies a graded record into the cache, and the graders of this spec grade it again.
+	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record: { grades: _grades, ...record } }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
 	const planned = planRuns(spec.configs, spec.runs, Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length])));
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 
@@ -357,21 +361,30 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	}
 
 	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
-	const stats = aggregate(runs, spec.configs.map((config) => config.name));
-	const saved = {
-		schema: 'eval-runner/v1',
-		id: evalId,
-		name: spec.name,
-		generatedAt: new Date().toISOString(),
-		cliVersion,
-		baseSha,
-		spec,
-		spent: dollars(spent),
-		configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name] })),
-		runs
+	const save = () => {
+		const stats = aggregate(runs, spec.configs.map((config) => config.name));
+		const saved = {
+			schema: 'eval-runner/v1',
+			id: evalId,
+			name: spec.name,
+			generatedAt: new Date().toISOString(),
+			cliVersion,
+			baseSha,
+			spec,
+			spent: dollars(spent),
+			configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name] })),
+			runs
+		};
+		writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
 	};
-	writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
+	save();
 	writeIndex(options.out);
+	// The graders come after the run cache, so a cached run never carries a grade into a later eval. eval.json exists
+	// before them: a grade pass that stops halfway loses only its grades, and grade.ts can run it again.
+	if (spec.graders && !options.noGrade) {
+		await gradeRuns({ evalId, evalDir, baseSha, spec, runs }, { exec });
+		save();
+	}
 	try {
 		rmdirSync(join(tmpdir(), 'eval-runner', evalId));
 	} catch {

@@ -57,10 +57,20 @@ export type Spec = {
 	dir: string;
 	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
 	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] }; services?: Service[] };
-	budget: { perRunUsd: number; perEvalUsd: number };
+	// gradersUsd: the budget of the command graders, apart from the budget of the agents.
+	budget: { perRunUsd: number; perEvalUsd: number; gradersUsd?: number };
 	runs: number;
 	configs: Config[];
+	graders?: Grader[];
 };
+
+// A grader judges the diff of a run after the eval (grade.ts). A command grader is a process that prints its findings
+// as JSON. Blind, it never sees the config name or the run id. A pattern grader reads the added lines of diff.patch.
+export type CommandGrader = { name: string; kind: 'command'; command: string; timeoutSec: number; blind: boolean };
+export type PatternRule = { name: string; pattern: string; paths?: string; severity: string };
+export type RequiredPath = { name: string; paths: string; severity: string };
+export type PatternGrader = { name: string; kind: 'pattern'; rules: PatternRule[]; require: RequiredPath[] };
+export type Grader = CommandGrader | PatternGrader;
 
 // A container that runs while the agent works, for example the database of the tests. `agentEnv` is the environment the
 // agent gets: `${host}` and `${port}` name the service, as the agent reaches it. The acceptance check does not use it.
@@ -146,8 +156,63 @@ function infraExitCodeOf(value: unknown): { infraExitCode?: number } {
 	return { infraExitCode: value as number };
 }
 
+const SLUG = /^[a-z0-9-]+$/;
+
+function regex(value: unknown, field: string): string {
+	const source = string(value, field);
+	try {
+		new RegExp(source);
+	} catch {
+		fail(field, `${source} is not a valid regular expression`);
+	}
+	return source;
+}
+
+// Names unique in their list, each a slug.
+function slugOf(value: unknown, field: string, seen: Set<string>): string {
+	const name = string(value, field);
+	if (!SLUG.test(name)) fail(field, 'must match [a-z0-9-]+');
+	if (seen.has(name)) fail(field, `duplicate name "${name}"`);
+	seen.add(name);
+	return name;
+}
+
+function gradersOf(value: unknown): Grader[] {
+	if (!Array.isArray(value) || value.length === 0) return fail('spec.graders', 'required non-empty array');
+	const names = new Set<string>();
+	return value.map((raw, index): Grader => {
+		const at = `spec.graders[${index}]`;
+		const kind = isObject(raw) ? raw.kind : undefined;
+		if (kind !== 'command' && kind !== 'pattern') return fail(`${at}.kind`, 'must be one of command, pattern');
+		if (kind === 'command') {
+			const grader = object(raw, at, ['name', 'kind', 'command', 'timeoutSec', 'blind']);
+			const name = slugOf(grader.name, `${at}.name`, names);
+			if (grader.blind !== undefined && grader.blind !== null && typeof grader.blind !== 'boolean') fail(`${at}.blind`, 'required boolean');
+			const timeoutSec = optional(grader.timeoutSec, `${at}.timeoutSec`, (entry, field) => number(entry, field, 1)) ?? 1800;
+			return { name, kind, command: string(grader.command, `${at}.command`), timeoutSec, blind: grader.blind !== false };
+		}
+		const grader = object(raw, at, ['name', 'kind', 'rules', 'require']);
+		const name = slugOf(grader.name, `${at}.name`, names);
+		const list = (entry: unknown, field: string) => (Array.isArray(entry) ? entry : fail(field, 'required array'));
+		const ruleNames = new Set<string>();
+		const rules = (optional(grader.rules, `${at}.rules`, list) ?? []).map((entry, position) => {
+			const field = `${at}.rules[${position}]`;
+			const rule = object(entry, field, ['name', 'pattern', 'paths', 'severity']);
+			const paths = optional(rule.paths, `${field}.paths`, regex);
+			return { name: slugOf(rule.name, `${field}.name`, ruleNames), pattern: regex(rule.pattern, `${field}.pattern`), ...(paths === undefined ? {} : { paths }), severity: string(rule.severity, `${field}.severity`) };
+		});
+		const required = (optional(grader.require, `${at}.require`, list) ?? []).map((entry, position) => {
+			const field = `${at}.require[${position}]`;
+			const rule = object(entry, field, ['name', 'paths', 'severity']);
+			return { name: slugOf(rule.name, `${field}.name`, ruleNames), paths: regex(rule.paths, `${field}.paths`), severity: string(rule.severity, `${field}.severity`) };
+		});
+		if (rules.length === 0 && required.length === 0) fail(at, 'a pattern grader needs at least one entry in rules or require');
+		return { name, kind, rules, require: required };
+	});
+}
+
 export function validateSpec(raw: unknown, dir: string): Spec {
-	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs']);
+	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs', 'graders']);
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
@@ -169,7 +234,9 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		hiddenTests = { commit: string(hidden.commit, 'spec.task.hiddenTests.commit'), paths };
 	}
 
-	const budget = object(spec.budget, 'spec.budget', ['perRunUsd', 'perEvalUsd']);
+	const budget = object(spec.budget, 'spec.budget', ['perRunUsd', 'perEvalUsd', 'gradersUsd']);
+	const gradersUsd = optional(budget.gradersUsd, 'spec.budget.gradersUsd', (value, field) => number(value, field, 0.000001));
+	const graders = optional(spec.graders, 'spec.graders', gradersOf);
 	const runs = optional(spec.runs, 'spec.runs', (value, field) => number(value, field, 1, 20, true)) ?? 3;
 
 	if (!Array.isArray(spec.configs) || spec.configs.length < 1 || spec.configs.length > 8) fail('spec.configs', 'required array of 1 to 8 configs');
@@ -303,10 +370,12 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		},
 		budget: {
 			perRunUsd: number(budget.perRunUsd, 'spec.budget.perRunUsd', 0.000001),
-			perEvalUsd: number(budget.perEvalUsd, 'spec.budget.perEvalUsd', 0.000001)
+			perEvalUsd: number(budget.perEvalUsd, 'spec.budget.perEvalUsd', 0.000001),
+			...(gradersUsd === undefined ? {} : { gradersUsd })
 		},
 		runs,
-		configs
+		configs,
+		...(graders === undefined ? {} : { graders })
 	};
 }
 

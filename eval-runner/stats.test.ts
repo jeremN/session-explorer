@@ -64,3 +64,24 @@ test('aggregate of a config with only skipped runs has n 0 and no metric', () =>
 	const result = aggregate([{ ...run('a', 'skipped', 0, false), metrics: undefined }], ['a']);
 	assert.deepEqual(result.a, { pass: { passed: 0, n: 0 }, metrics: {} });
 });
+
+test('aggregate counts the graded runs, the runs with findings and the findings by severity, per config and grader', () => {
+	const finding = (severity: string) => ({ severity, summary: 'x' });
+	const runs: RunRecord[] = [
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [finding('important'), finding('minor')] }, rules: { status: 'ok', findings: [] } } },
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [finding('minor')] }, rules: { status: 'ok', findings: [finding('minor')] } } },
+		// An error grade is not a sample: its findings do not count.
+		{ ...run('a', 'timeout', 1, false), grades: { review: { status: 'error', findings: [finding('important')], note: 'exit code 1' } } },
+		{ ...run('b', 'ok', 1, true), grades: { review: { status: 'ok', findings: [] } } },
+		{ ...run('b', 'error', 1, false), grades: { review: { status: 'skipped', findings: [], note: 'run status error' } } },
+		run('c', 'ok', 1, true)
+	];
+	const result = aggregate(runs, ['a', 'b', 'c']);
+	assert.deepEqual(result.a.grades, {
+		review: { graded: 2, withFindings: 2, findings: 3, bySeverity: { important: 1, minor: 2 } },
+		rules: { graded: 2, withFindings: 1, findings: 1, bySeverity: { minor: 1 } }
+	});
+	assert.deepEqual(result.b.grades, { review: { graded: 1, withFindings: 0, findings: 0, bySeverity: {} } });
+	// A config with no grade keeps the shape it had before graders existed.
+	assert.equal('grades' in result.c, false);
+});

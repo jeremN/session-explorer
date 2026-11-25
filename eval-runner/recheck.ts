@@ -16,7 +16,7 @@ import type { Exec } from './exec.ts';
 import { loadSpec } from './spec.ts';
 import type { Config, Spec } from './spec.ts';
 import type { RunRecord } from './stats.ts';
-import { collectDiff, createWorkspace, removeWorkspace } from './workspace.ts';
+import { collectDiff, rebuildRun, removeWorkspace } from './workspace.ts';
 
 type SavedEval = { id: string; baseSha: string; spec: { dir: string; task: Spec['task']; configs: Config[] }; runs: RunRecord[] };
 
@@ -29,16 +29,7 @@ async function recheckRun(exec: Exec, ev: SavedEval, task: Spec['task'], specDir
 	const clone = mkdtempSync(join(tmpdir(), 'eval-recheck-'));
 	const gitDir = mkdtempSync(join(tmpdir(), 'eval-recheck-git-'));
 	try {
-		const { setupSha, fileMode } = await createWorkspace(exec, { repo: task.repo, baseSha: ev.baseSha, dir: clone, gitDir, setup: setupFiles(config) });
-		if (task.setup) {
-			const prepared = await exec('sh', ['-c', task.setup.command], { cwd: clone, env: { EVAL_SPEC_DIR: specDir }, timeoutMs: task.setup.timeoutSec * 1000 });
-			if (prepared.code !== 0 || prepared.timedOut) throw new Error(`setup failed: ${(prepared.stdout + prepared.stderr).trim().slice(-200)}`);
-		}
-		const patch = join(runDir, 'diff.patch');
-		if (readFileSync(patch, 'utf8').trim()) {
-			const applied = await exec('git', ['apply', '--whitespace=nowarn', patch], { cwd: clone });
-			if (applied.code !== 0) throw new Error(`diff.patch does not apply: ${applied.stderr.trim().slice(0, 200)}`);
-		}
+		const { setupSha, fileMode } = await rebuildRun(exec, { task, baseSha: ev.baseSha, specDir, setup: setupFiles(config), patch: join(runDir, 'diff.patch'), dir: clone, gitDir });
 		// The saved patch has no binary content: a run whose diff counts differ is not the same change.
 		const { patch: _patch, ...diff } = await collectDiff(exec, clone, setupSha, gitDir, fileMode);
 		const saved = record.diff ?? { files: 0, added: 0, deleted: 0 };

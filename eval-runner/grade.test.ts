@@ -1,0 +1,291 @@
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, test } from 'node:test';
+
+import { realExec } from './exec.ts';
+import { main, patternFindings } from './grade.ts';
+import type { PatternGrader } from './spec.ts';
+
+const root = mkdtempSync(join(tmpdir(), 'eval-grade-test-'));
+after(() => rmSync(root, { recursive: true, force: true }));
+
+// Two files changed, one deleted. Line numbers are those of the new file.
+const PATCH = [
+	'diff --git a/src/a.ts b/src/a.ts',
+	'index 1111111..2222222 100644',
+	'--- a/src/a.ts',
+	'+++ b/src/a.ts',
+	'@@ -1,3 +1,4 @@',
+	' const one = 1;',
+	'-const two = x as Two;',
+	'+const two = x as Two;  ',
+	'+++i;',
+	' const three = 3;',
+	'@@ -10,2 +11,3 @@ function f() {',
+	' a();',
+	'+b(y as Bee);',
+	' c();',
+	'diff --git a/notes.md b/notes.md',
+	'new file mode 100644',
+	'--- /dev/null',
+	'+++ b/notes.md',
+	'@@ -0,0 +1,2 @@',
+	'+use it as Text',
+	'+done',
+	'\\ No newline at end of file',
+	'diff --git a/old/gone.md b/old/gone.md',
+	'deleted file mode 100644',
+	'--- a/old/gone.md',
+	'+++ /dev/null',
+	'@@ -1 +0,0 @@',
+	'-removed as Gone',
+	''
+].join('\n');
+
+const rules = (extra: Partial<PatternGrader> = {}): PatternGrader => ({
+	name: 'rules',
+	kind: 'pattern',
+	rules: [{ name: 'no-as-cast', pattern: '\\bas [A-Z]\\w+', paths: '\\.ts$', severity: 'minor' }, { name: 'plus', pattern: '^\\+\\+i', severity: 'nit' }],
+	require: [],
+	...extra
+});
+
+test('a pattern rule finds the added lines of the matching files, with the line number of the new file', () => {
+	assert.deepEqual(patternFindings(rules(), PATCH), [
+		{ severity: 'minor', rule: 'no-as-cast', file: 'src/a.ts', line: 2, summary: 'const two = x as Two;' },
+		// An added line can start with ++: it is still a line of the hunk, not a file header.
+		{ severity: 'nit', rule: 'plus', file: 'src/a.ts', line: 3, summary: '++i;' },
+		{ severity: 'minor', rule: 'no-as-cast', file: 'src/a.ts', line: 12, summary: 'b(y as Bee);' }
+	]);
+	// Without paths a rule reads every file. A deleted line never matches.
+	const all = patternFindings(rules({ rules: [{ name: 'cast', pattern: 'as [A-Z]', severity: 'minor' }] }), PATCH);
+	assert.deepEqual(all.map((finding) => `${finding.file}:${finding.line}`), ['src/a.ts:2', 'src/a.ts:12', 'notes.md:1']);
+	// The summary is the trimmed line, 200 characters at most.
+	const long = patternFindings(rules({ rules: [{ name: 'x', pattern: 'x', severity: 'minor' }] }), `--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+${'x'.repeat(300)}\n`);
+	assert.equal(long[0].summary.length, 200);
+});
+
+test('a require rule gives one finding when no changed file matches, and a deleted file does not count', () => {
+	const grader = rules({
+		rules: [],
+		require: [
+			{ name: 'notes', paths: '\\.md$', severity: 'important' },
+			{ name: 'changeset', paths: '^\\.changeset/', severity: 'important' },
+			{ name: 'gone', paths: '^old/', severity: 'minor' }
+		]
+	});
+	assert.deepEqual(patternFindings(grader, PATCH), [
+		{ severity: 'important', rule: 'changeset', summary: 'no changed file matches ^\\.changeset/' },
+		{ severity: 'minor', rule: 'gone', summary: 'no changed file matches ^old/' }
+	]);
+});
+
+async function git(cwd: string, ...args: string[]) {
+	const result = await realExec('git', ['-c', 'user.email=test@localhost', '-c', 'user.name=test', ...args], { cwd });
+	assert.equal(result.code, 0, result.stderr);
+	return result.stdout.trim();
+}
+
+// The grader script writes what it saw next to it, then prints its findings. Its first argument picks a behavior.
+const GRADER = `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const mode = process.argv[2];
+if (mode === 'bad') { console.log('not json'); process.exit(0); }
+if (mode === 'fail') { console.error('boom'); process.exit(3); }
+if (mode === 'slow') await new Promise((wake) => setTimeout(wake, 5000));
+const id = process.env.EVAL_GRADE_ID;
+writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '.json'), JSON.stringify({ id, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), env: process.env }));
+console.log(JSON.stringify({ findings: [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1, extra: 'dropped' }], costUsd: 0.4 }));
+`;
+
+// A repo at its base commit, a saved eval of two configs, and a grader script in the spec folder. The config names and
+// the run ids are distinct words, so a test can look for them in what the grader saw.
+async function fixture(name: string, graders: unknown[], budget: Record<string, number> = {}) {
+	const repo = join(root, name, 'repo');
+	mkdirSync(repo, { recursive: true });
+	await git(repo, 'init', '-q', '-b', 'main');
+	writeFileSync(join(repo, 'answer.txt'), '0\n');
+	await git(repo, 'add', '-A');
+	await git(repo, 'commit', '-q', '-m', 'base');
+	const base = await git(repo, 'rev-parse', 'HEAD');
+	const specDir = join(root, name, 'spec');
+	mkdirSync(specDir);
+	writeFileSync(join(specDir, 'grader.mjs'), GRADER);
+	const evalDir = join(root, name, 'out', 'e1');
+	// Each run has its own diff, so no run reuses the grade of another from the grade cache.
+	const patchOf = (answer: number) => `diff --git a/answer.txt b/answer.txt\n--- a/answer.txt\n+++ b/answer.txt\n@@ -1 +1 @@\n-0\n+${answer}\n`;
+	const patches: Record<string, string> = { 'zebra-config-1': patchOf(42), 'yak-config-1': patchOf(43), 'zebra-config-2': '' };
+	const runs = [
+		{ id: 'zebra-config-1', config: 'zebra-config', status: 'ok', diff: { files: 1, added: 1, deleted: 1 } },
+		{ id: 'yak-config-1', config: 'yak-config', status: 'timeout', diff: { files: 1, added: 1, deleted: 1 } },
+		{ id: 'yak-config-2', config: 'yak-config', status: 'error', note: 'crash' },
+		{ id: 'zebra-config-2', config: 'zebra-config', status: 'ok', diff: { files: 0, added: 0, deleted: 0 } }
+	];
+	for (const run of runs) {
+		mkdirSync(join(evalDir, 'runs', run.id), { recursive: true });
+		if (run.id in patches) writeFileSync(join(evalDir, 'runs', run.id, 'diff.patch'), patches[run.id]);
+	}
+	const task = { repo, base: 'HEAD', prompt: 'Make it 42.', timeoutSec: 60, acceptance: { command: 'true', timeoutSec: 30 } };
+	// zebra-config writes a harness file: a blind grader must not see it.
+	const configs = [{ name: 'zebra-config', files: { 'HARNESS.md': { text: 'zebra rules\n' } } }, { name: 'yak-config' }];
+	const ev = {
+		schema: 'eval-runner/v1',
+		id: 'e1',
+		name,
+		baseSha: base,
+		spec: { name, dir: specDir, task, budget: { perRunUsd: 1, perEvalUsd: 6, ...budget }, runs: 2, configs, graders },
+		configs: configs.map((config) => ({ name: config.name, agent: 'claude', model: null, pass: { passed: 0, n: 2 }, metrics: {} })),
+		runs
+	};
+	writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(ev));
+	return { repo, base, specDir, evalDir, task, patches };
+}
+
+const review = (mode: string, extra: Record<string, unknown> = {}) => ({ name: 'review', kind: 'command', command: `node "$EVAL_SPEC_DIR/grader.mjs" ${mode}`, timeoutSec: 60, blind: true, ...extra });
+const saved = (evalDir: string) => JSON.parse(readFileSync(join(evalDir, 'eval.json'), 'utf8'));
+const seen = (specDir: string) => readdirSync(specDir).filter((file) => file.startsWith('seen-')).map((file) => JSON.parse(readFileSync(join(specDir, file), 'utf8')));
+
+async function quiet(run: () => Promise<number>) {
+	const lines: string[] = [];
+	const { log, error } = console;
+	console.log = (line: string) => lines.push(String(line));
+	console.error = (line: string) => lines.push(String(line));
+	try {
+		return { code: await run(), lines };
+	} finally {
+		Object.assign(console, { log, error });
+	}
+}
+
+test('a command grader runs blind in a new clone of the change, and its findings go to the record and the config stats', async () => {
+	const { base, specDir, evalDir, patches } = await fixture('command', [review('ok')]);
+	const { code, lines } = await quiet(() => main([evalDir]));
+	assert.equal(code, 0, lines.join('\n'));
+	const ev = saved(evalDir);
+	const grades = Object.fromEntries(ev.runs.map((run: { id: string; grades?: Record<string, unknown> }) => [run.id, run.grades?.review]));
+	for (const id of ['zebra-config-1', 'yak-config-1']) {
+		assert.equal(grades[id].status, 'ok');
+		assert.match(grades[id].id, /^[0-9a-f]{8}$/);
+		assert.deepEqual(grades[id].findings, [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1 }]);
+		assert.equal(grades[id].costUsd, 0.4);
+		assert.equal(typeof grades[id].durationMs, 'number');
+		assert.match(readFileSync(join(evalDir, 'runs', id, 'grade-review.log'), 'utf8'), /answer is hard-coded/);
+	}
+	// A run that did not finish, and a run with no change, are not graded.
+	assert.equal(grades['yak-config-2'].status, 'skipped');
+	assert.equal(grades['zebra-config-2'].status, 'skipped');
+	assert.deepEqual(ev.configs.map((config: { grades: unknown }) => config.grades), [
+		{ review: { graded: 1, withFindings: 1, findings: 1, bySeverity: { minor: 1 } } },
+		{ review: { graded: 1, withFindings: 1, findings: 1, bySeverity: { minor: 1 } } }
+	]);
+
+	const views = seen(specDir);
+	assert.equal(views.length, 2);
+	for (const view of views) {
+		// The grade id is the one of the record: it links the view to its run.
+		const runId = ['zebra-config-1', 'yak-config-1'].find((id) => grades[id].id === view.id)!;
+		assert.ok(runId, view.id);
+		assert.equal(view.base, base);
+		assert.equal(view.specDir, specDir);
+		assert.equal(view.answer, runId === 'zebra-config-1' ? '42\n' : '43\n');
+		assert.equal(view.diffText, patches[runId]);
+		// The clone holds the base, not the harness files of the config.
+		assert.equal(view.harness, false);
+		// The copy of the patch is named by the grade id.
+		assert.ok(view.diff.endsWith(`${view.id}.patch`));
+		// Blind: no config name and no run id in the cwd, the patch path or the environment. Both are gone after the grade.
+		for (const word of ['zebra-config', 'yak-config']) {
+			assert.ok(!view.cwd.includes(word) && !view.diff.includes(word), view.cwd);
+			for (const [key, value] of Object.entries(view.env as Record<string, string>)) assert.ok(!String(value).includes(word), `${key}=${value}`);
+		}
+		assert.equal(existsSync(view.cwd), false);
+		assert.equal(existsSync(view.diff), false);
+	}
+	// The progress lines name the grade id and the grader, never the config. The summary at the end names the configs.
+	const progress = lines.filter((line) => line.startsWith('['));
+	assert.equal(progress.length, 2);
+	for (const line of progress) {
+		assert.match(line, /^\[\d\/2\] [0-9a-f]{8} review ok, 1 finding, 0\.4 \$$/);
+		assert.doesNotMatch(line, /zebra|yak/);
+	}
+	assert.ok(lines.some((line) => /zebra-config/.test(line) && /1\/1/.test(line)), lines.join('\n'));
+});
+
+test('a grade is reused from the cache at no cost, and --force runs the grader again', async () => {
+	// The first grade costs 0.4 $: it reaches the budget, so the second grade of the pass gets the status budget.
+	const { specDir, evalDir } = await fixture('cache', [review('ok')], { gradersUsd: 0.3 });
+	assert.equal((await quiet(() => main([evalDir]))).code, 0);
+	assert.equal(seen(specDir).length, 1, 'the budget stops the second grade');
+	const first = saved(evalDir).runs.map((run: { grades: { review: { status: string } } }) => run.grades.review.status);
+	assert.deepEqual(first.filter((status: string) => status !== 'skipped').sort(), ['budget', 'ok']);
+
+	// The second pass reuses the cached grade, so the budget still allows one new grade.
+	const again = await quiet(() => main([evalDir]));
+	assert.equal(again.code, 0);
+	assert.equal(seen(specDir).length, 2);
+	const grades = saved(evalDir).runs.flatMap((run: { grades: { review: { status: string; cached?: boolean } } }) => (run.grades.review.status === 'ok' ? [run.grades.review] : []));
+	assert.equal(grades.length, 2);
+	assert.equal(grades.filter((grade: { cached?: boolean }) => grade.cached).length, 1);
+	assert.ok(again.lines.some((line) => / review ok, 1 finding, cached$/.test(line)), again.lines.join('\n'));
+	assert.ok(existsSync(join(evalDir, '..', 'cache', 'grades')));
+
+	const forced = await quiet(() => main([evalDir, '--force', '--runs', 'zebra-config-1']));
+	assert.equal(forced.code, 0);
+	assert.equal(seen(specDir).length, 3);
+	assert.equal(saved(evalDir).runs[0].grades.review.cached, undefined);
+});
+
+test('invalid JSON and a non-zero exit give an error grade, a slow grader a timeout grade, and grade.ts exits 1', async () => {
+	const { evalDir } = await fixture('errors', [review('bad'), { ...review('fail'), name: 'crash' }, { ...review('slow'), name: 'slow', timeoutSec: 0.5 }]);
+	const { code } = await quiet(() => main([evalDir, '--runs', 'zebra-config-1']));
+	assert.equal(code, 1);
+	const { grades } = saved(evalDir).runs[0];
+	assert.equal(grades.review.status, 'error');
+	assert.match(grades.review.note, /JSON/);
+	assert.equal(grades.crash.status, 'error');
+	assert.match(grades.crash.note, /exit code 3.*boom/);
+	assert.equal(grades.slow.status, 'timeout');
+	assert.deepEqual(grades.slow.findings, []);
+	// --runs leaves the other runs as they were.
+	assert.equal(saved(evalDir).runs[1].grades, undefined);
+});
+
+test('a pattern grader needs no clone; --graders picks the graders and keeps the grades of the others', async () => {
+	const pattern = { name: 'rules', kind: 'pattern', rules: [{ name: 'magic', pattern: '\\b42\\b', severity: 'minor' }], require: [{ name: 'tests', paths: '\\.test\\.', severity: 'important' }] };
+	const { specDir, evalDir } = await fixture('pattern', [review('ok'), pattern]);
+	assert.equal((await quiet(() => main([evalDir, '--graders', 'rules']))).code, 0);
+	assert.equal(seen(specDir).length, 0);
+	const [run] = saved(evalDir).runs;
+	assert.deepEqual(run.grades.rules.findings, [
+		{ severity: 'minor', rule: 'magic', file: 'answer.txt', line: 1, summary: '42' },
+		{ severity: 'important', rule: 'tests', summary: 'no changed file matches \\.test\\.' }
+	]);
+	assert.equal(run.grades.review, undefined);
+	assert.equal((await quiet(() => main([evalDir, '--graders', 'review']))).code, 0);
+	assert.ok(saved(evalDir).runs[0].grades.rules);
+	assert.equal(saved(evalDir).runs[0].grades.review.status, 'ok');
+});
+
+test('a non-blind grader gets the config and the run id; --spec must name the same task and adds its graders', async () => {
+	const { specDir, evalDir, task } = await fixture('open', [review('ok', { blind: false })]);
+	assert.equal((await quiet(() => main([evalDir, '--runs', 'zebra-config-1']))).code, 0);
+	const [view] = seen(specDir);
+	assert.equal(view.env.EVAL_CONFIG, 'zebra-config');
+	assert.equal(view.env.EVAL_RUN_ID, 'zebra-config-1');
+
+	const other = join(specDir, 'other.json');
+	writeFileSync(other, JSON.stringify({ name: 'x', task: { ...task, prompt: 'Something else.' }, budget: { perRunUsd: 1, perEvalUsd: 1 }, configs: [{ name: 'a' }], graders: [{ name: 'rules', kind: 'pattern', rules: [{ name: 'magic', pattern: '42', severity: 'minor' }] }] }));
+	assert.equal((await quiet(() => main([evalDir, '--spec', other]))).code, 2);
+	const same = join(specDir, 'same.json');
+	writeFileSync(same, JSON.stringify({ name: 'x', task, budget: { perRunUsd: 1, perEvalUsd: 1 }, configs: [{ name: 'a' }], graders: [{ name: 'rules', kind: 'pattern', rules: [{ name: 'magic', pattern: '42', severity: 'minor' }] }] }));
+	assert.equal((await quiet(() => main([evalDir, '--spec', same, '--graders', 'rules']))).code, 0);
+	const ev = saved(evalDir);
+	assert.deepEqual(ev.spec.graders.map((grader: { name: string }) => grader.name), ['review', 'rules']);
+	assert.equal(ev.runs[0].grades.rules.findings.length, 1);
+
+	assert.equal((await quiet(() => main([evalDir, '--graders', 'ghost']))).code, 2);
+	assert.equal((await quiet(() => main([evalDir, '--nope']))).code, 2);
+	assert.equal((await quiet(() => main([join(root, 'nowhere')]))).code, 2);
+});

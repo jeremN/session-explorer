@@ -206,3 +206,50 @@ test('files maps relative paths inside the clone to a text or a file, for any ag
 	for (const path of ['/etc/x', '../up', 'a/../b', '.git/config', 'a//b', '.']) failure(withConfig({ files: { [path]: { text: 'x' } } }), 'configs[0].files');
 });
 
+test('graders: a command grader gets its defaults, a pattern grader keeps its rules, and budget.gradersUsd is optional', () => {
+	const raw = {
+		...base(),
+		budget: { perRunUsd: 1, perEvalUsd: 6, gradersUsd: 3 },
+		graders: [
+			{ name: 'review', kind: 'command', command: 'node "$EVAL_SPEC_DIR/review.mjs"' },
+			{ name: 'rules', kind: 'pattern', rules: [{ name: 'no-as-cast', pattern: '\\bas [A-Z]\\w+', paths: '\\.ts$', severity: 'minor' }], require: [{ name: 'changeset', paths: '^\\.changeset/.+\\.md$', severity: 'important' }] }
+		]
+	};
+	const spec = validateSpec(raw, '/specs/demo');
+	assert.equal(spec.budget.gradersUsd, 3);
+	assert.deepEqual(spec.graders, [
+		{ name: 'review', kind: 'command', command: 'node "$EVAL_SPEC_DIR/review.mjs"', timeoutSec: 1800, blind: true },
+		{ name: 'rules', kind: 'pattern', rules: [{ name: 'no-as-cast', pattern: '\\bas [A-Z]\\w+', paths: '\\.ts$', severity: 'minor' }], require: [{ name: 'changeset', paths: '^\\.changeset/.+\\.md$', severity: 'important' }] }
+	]);
+	const open = validateSpec({ ...base(), graders: [{ name: 'r', kind: 'command', command: 'true', timeoutSec: 60, blind: false }] }, '/s').graders![0];
+	assert.deepEqual(open, { name: 'r', kind: 'command', command: 'true', timeoutSec: 60, blind: false });
+	// A rule without paths reads every file. A pattern grader can have only rules, or only require.
+	assert.deepEqual(validateSpec({ ...base(), graders: [{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }] }] }, '/s').graders![0], { name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }], require: [] });
+	// A spec without graders keeps the shape it had before the field existed.
+	const plain = validateSpec(base(), '/s');
+	assert.equal('graders' in plain, false);
+	assert.equal('gradersUsd' in plain.budget, false);
+});
+
+test('graders: unknown field, duplicate or bad name, bad kind, bad regex and an empty pattern grader are refused', () => {
+	const withGraders = (graders: unknown) => ({ ...base(), graders });
+	failure(withGraders([{ name: 'r', kind: 'command', command: 'true', extra: 1 }]), 'spec.graders[0].extra');
+	failure(withGraders([{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor', paths: 'b', other: 1 }] }]), 'spec.graders[0].rules[0].other');
+	failure(withGraders([{ name: 'r', kind: 'command', command: 'true' }, { name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }] }]), 'spec.graders[1].name');
+	failure(withGraders([{ name: 'Review', kind: 'command', command: 'true' }]), 'spec.graders[0].name');
+	failure(withGraders([{ name: 'r', kind: 'llm', command: 'true' }]), 'spec.graders[0].kind');
+	failure(withGraders([{ name: 'r', kind: 'command' }]), 'spec.graders[0].command');
+	failure(withGraders([{ name: 'r', kind: 'command', command: 'true', blind: 'yes' }]), 'spec.graders[0].blind');
+	failure(withGraders([{ name: 'r', kind: 'command', command: 'true', timeoutSec: 0 }]), 'spec.graders[0].timeoutSec');
+	failure(withGraders([{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: '(', severity: 'minor' }] }]), 'spec.graders[0].rules[0].pattern');
+	failure(withGraders([{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', paths: '[', severity: 'minor' }] }]), 'spec.graders[0].rules[0].paths');
+	failure(withGraders([{ name: 'r', kind: 'pattern', require: [{ name: 'x', paths: '*', severity: 'minor' }] }]), 'spec.graders[0].require[0].paths');
+	failure(withGraders([{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a' }] }]), 'spec.graders[0].rules[0].severity');
+	failure(withGraders([{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }, { name: 'x', pattern: 'b', severity: 'minor' }] }]), 'spec.graders[0].rules[1].name');
+	failure(withGraders([{ name: 'r', kind: 'pattern' }]), 'spec.graders[0]');
+	failure(withGraders([{ name: 'r', kind: 'pattern', command: 'true', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }] }]), 'spec.graders[0].command');
+	failure(withGraders([]), 'spec.graders');
+	failure(withGraders({}), 'spec.graders');
+	failure({ ...base(), budget: { perRunUsd: 1, perEvalUsd: 6, gradersUsd: 0 } }, 'spec.budget.gradersUsd');
+});
+
