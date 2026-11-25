@@ -46,6 +46,12 @@ test('a referenced file counts by its content, not by its path', () => {
 	assert.notEqual(key({ config: { claudeMd: { file: join(dir, 'a.md') }, skills: [join(dir, 'skill')] } }), byFile);
 	writeFileSync(join(dir, 'a.md'), 'Be brief.\n');
 	assert.notEqual(key({ config: { claudeMd: { file: join(dir, 'a.md') }, skills: [join(dir, 'skill')] } }), byFile);
+	writeFileSync(join(dir, 'c.md'), 'Lite.\n');
+	writeFileSync(join(dir, 'd.md'), 'Lite.\n');
+	const byFiles = key({ config: { files: { 'AGENTS.md': { file: join(dir, 'c.md') } } } });
+	assert.equal(key({ config: { files: { 'AGENTS.md': { file: join(dir, 'd.md') } } } }), byFiles);
+	writeFileSync(join(dir, 'c.md'), 'Lighter.\n');
+	assert.notEqual(key({ config: { files: { 'AGENTS.md': { file: join(dir, 'c.md') } } } }), byFiles);
 });
 
 test('readCache returns the finished runs of a key, newest last; error and skipped runs are not kept', () => {

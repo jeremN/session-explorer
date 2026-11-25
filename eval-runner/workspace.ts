@@ -9,7 +9,7 @@ import type { Config } from './spec.ts';
 // `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
 // `localMd` becomes CLAUDE.local.md: Claude Code reads it with the CLAUDE.md of the project, as a user CLAUDE.md.
 // `remove` is deleted first, so a claudeMd or a skill of the config can take the place of a removed file.
-type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string; remove?: string[] };
+type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string; remove?: string[]; files?: Config['files'] };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
@@ -87,6 +87,13 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 		// rmSync removes a symlink itself, never its target; a symlinked parent would point the removal outside the clone.
 		refuseSymlinks(dir, path);
 		rmSync(join(dir, path), { recursive: true, force: true });
+	}
+	for (const [path, content] of Object.entries(setup.files ?? {})) {
+		// Same guard as a skill: no write through a symlinked parent, and the file itself is removed before the write.
+		refuseSymlinks(dir, path);
+		rmSync(join(dir, path), { recursive: true, force: true });
+		mkdirSync(dirname(join(dir, path)), { recursive: true });
+		writeFileSync(join(dir, path), 'text' in content ? content.text : readFileSync(content.file, 'utf8'));
 	}
 	const instructions: [string, Config['claudeMd']][] = [[setup.instructionFile ?? 'CLAUDE.md', setup.claudeMd], ['CLAUDE.local.md', setup.localMd]];
 	for (const [file, md] of instructions) {

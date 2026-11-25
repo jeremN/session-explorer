@@ -401,3 +401,23 @@ test('remove deletes committed paths before the setup commit, so the removal is 
 	await removeWorkspace(dir);
 });
 
+test('files replaces committed files and adds new ones in the setup commit, so the change is not agent work', async () => {
+	mkdirSync(join(repo, 'apps', 'bff'), { recursive: true });
+	writeFileSync(join(repo, 'AGENTS.md'), 'team rules\n');
+	writeFileSync(join(repo, 'apps', 'bff', 'AGENTS.md'), 'bff rules\n');
+	await git(repo, 'add', '-A');
+	await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'nested harness');
+	const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
+	const lite = join(root, 'lite.md');
+	writeFileSync(lite, 'lite rules\n');
+	const dir = join(root, 'clones', 'files');
+	const gitDir = gitDirOf('files');
+	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: head, dir, gitDir, setup: { claudeMd: undefined, skills: [], files: { 'AGENTS.md': { file: lite }, 'docs/new/NOTE.md': { text: 'new\n' } } } });
+	assert.equal(readFileSync(join(dir, 'AGENTS.md'), 'utf8'), 'lite rules\n');
+	assert.equal(readFileSync(join(dir, 'docs', 'new', 'NOTE.md'), 'utf8'), 'new\n');
+	assert.equal(readFileSync(join(dir, 'apps', 'bff', 'AGENTS.md'), 'utf8'), 'bff rules\n');
+	assert.deepEqual((await git(dir, 'show', '--name-only', '--format=', setupSha)).trim().split('\n').sort(), ['AGENTS.md', 'docs/new/NOTE.md']);
+	assert.equal((await collectDiff(realExec, dir, setupSha, gitDir)).files, 0);
+	await removeWorkspace(dir);
+});
+
