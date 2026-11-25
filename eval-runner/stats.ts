@@ -41,11 +41,17 @@ export type RunRecord = {
 	// The grade of each grader of the spec, by grader name (grade.ts).
 	grades?: Record<string, Grade>;
 };
-export type Finding = { severity: string; summary: string; file?: string; line?: number; rule?: string };
+// `sample`: the index of the sample of the command grader that gave the finding, when the grader has more than one sample.
+export type Finding = { severity: string; summary: string; file?: string; line?: number; rule?: string; sample?: number };
+// The summary of one sample of a command grader. A sample that the budget stopped has the status budget.
+export type GradeSample = { status: 'ok' | 'error' | 'timeout' | 'budget'; findings: number; costUsd?: number; durationMs?: number; note?: string };
 // `id`: the blind grade id. The command grader saw it in place of the run id, so it links a grader report to the run.
 // `cached`: the grade comes from the grade cache, at no cost.
-export type Grade = { status: 'ok' | 'error' | 'timeout' | 'budget' | 'skipped'; id?: string; findings: Finding[]; costUsd?: number; durationMs?: number; note?: string; cached?: boolean };
-// Per grader: the runs with an ok grade, the runs with one finding or more among them, and their findings.
+// `flagged`: the verdict on the diff, set on an ok grade. With samples, `findings` holds the findings of all samples,
+// and `samples` the summary of each.
+export type Grade = { status: 'ok' | 'error' | 'timeout' | 'budget' | 'skipped'; id?: string; findings: Finding[]; flagged?: boolean; samples?: GradeSample[]; costUsd?: number; durationMs?: number; note?: string; cached?: boolean };
+// Per grader: the runs with an ok grade, the flagged runs among them, and their findings. A grade of an older version
+// has no flagged: one finding or more flags it.
 export type GradeStats = { graded: number; withFindings: number; findings: number; bySeverity: Record<string, number> };
 export type Spread = { n: number; median: number; min: number; max: number; values: number[] };
 export type ConfigStats = { pass: { passed: number; n: number }; metrics: Record<string, Spread>; grades?: Record<string, GradeStats> };
@@ -111,7 +117,7 @@ export function gradeStats(runs: RunRecord[]): Record<string, GradeStats> | unde
 			const stats = (result[name] ??= { graded: 0, withFindings: 0, findings: 0, bySeverity: {} });
 			if (grade.status !== 'ok') continue;
 			stats.graded += 1;
-			if (grade.findings.length > 0) stats.withFindings += 1;
+			if (grade.flagged ?? grade.findings.length > 0) stats.withFindings += 1;
 			stats.findings += grade.findings.length;
 			for (const finding of grade.findings) stats.bySeverity[finding.severity] = (stats.bySeverity[finding.severity] ?? 0) + 1;
 		}

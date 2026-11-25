@@ -66,7 +66,10 @@ export type Spec = {
 
 // A grader judges the diff of a run after the eval (grade.ts). A command grader is a process that prints its findings
 // as JSON. Blind, it never sees the config name or the run id. A pattern grader reads the added lines of diff.patch.
-export type CommandGrader = { name: string; kind: 'command'; command: string; timeoutSec: number; blind: boolean };
+// `samples`: how many times the command runs per diff, default 1. `merge`: how the samples give one verdict, default majority.
+// Both are absent when the spec does not set them, so an older eval.json has the same graders.
+export type CommandGrader = { name: string; kind: 'command'; command: string; timeoutSec: number; blind: boolean; samples?: number; merge?: GraderMerge };
+export type GraderMerge = 'majority' | 'union';
 export type PatternRule = { name: string; pattern: string; paths?: string; severity: string };
 export type RequiredPath = { name: string; paths: string; severity: string };
 export type PatternGrader = { name: string; kind: 'pattern'; rules: PatternRule[]; require: RequiredPath[] };
@@ -185,11 +188,13 @@ function gradersOf(value: unknown): Grader[] {
 		const kind = isObject(raw) ? raw.kind : undefined;
 		if (kind !== 'command' && kind !== 'pattern') return fail(`${at}.kind`, 'must be one of command, pattern');
 		if (kind === 'command') {
-			const grader = object(raw, at, ['name', 'kind', 'command', 'timeoutSec', 'blind']);
+			const grader = object(raw, at, ['name', 'kind', 'command', 'timeoutSec', 'blind', 'samples', 'merge']);
 			const name = slugOf(grader.name, `${at}.name`, names);
 			if (grader.blind !== undefined && grader.blind !== null && typeof grader.blind !== 'boolean') fail(`${at}.blind`, 'required boolean');
 			const timeoutSec = optional(grader.timeoutSec, `${at}.timeoutSec`, (entry, field) => number(entry, field, 1)) ?? 1800;
-			return { name, kind, command: string(grader.command, `${at}.command`), timeoutSec, blind: grader.blind !== false };
+			const samples = optional(grader.samples, `${at}.samples`, (entry, field) => number(entry, field, 1, 5, true));
+			const merge = optional(grader.merge, `${at}.merge`, (entry, field) => (entry === 'majority' || entry === 'union' ? entry : fail(field, 'must be one of majority, union')));
+			return { name, kind, command: string(grader.command, `${at}.command`), timeoutSec, blind: grader.blind !== false, ...(samples === undefined ? {} : { samples }), ...(merge === undefined ? {} : { merge }) };
 		}
 		const grader = object(raw, at, ['name', 'kind', 'rules', 'require']);
 		const name = slugOf(grader.name, `${at}.name`, names);

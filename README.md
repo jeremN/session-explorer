@@ -157,6 +157,8 @@ The acceptance check tells pass from fail. When every config passes, it does not
 | `command` | A command grader: the shell command. It runs in the clone, so keep the script next to the spec and name it with `$EVAL_SPEC_DIR`. |
 | `timeoutSec` | A command grader: the time limit. Default 1800. |
 | `blind` | A command grader: default `true`. See below. |
+| `samples` | A command grader: how many times the command runs per diff, an integer from 1 to 5. Default 1. See below. |
+| `merge` | A command grader: `majority` or `union`, how the samples give one verdict. Default `majority`. See below. |
 | `rules` | A pattern grader: `{ name, pattern, paths?, severity }`. `pattern` and `paths` are regular expressions. |
 | `require` | A pattern grader: `{ name, paths, severity }`. |
 
@@ -170,18 +172,29 @@ The runner grades a run with the status `ok` or `timeout` and a diff that is not
 | `EVAL_BASE` | The SHA of the base commit. |
 | `EVAL_DIFF` | The absolute path of a copy of `diff.patch`, named by the grade id. |
 | `EVAL_SPEC_DIR` | The spec folder. |
+| `EVAL_SAMPLE` | The index of the sample, from 0. It is 0 for a grader with one sample. |
 
 The command prints one JSON object on stdout: `{ "findings": [{ "severity": "...", "summary": "...", "file"?: "...", "line"?: 12, "rule"?: "..." }], "costUsd"?: 0.42 }`. Invalid JSON or a non-zero exit code gives the status `error` and a `note`. A command over its time limit gives the status `timeout`. The stdout and the stderr go to `runs/<runId>/grade-<name>.log`. The runner removes the clone and the copy of the patch after the grade.
 
 **Blind mode.** A blind grader never gets the config name or the run id: not in its working directory, the path of the patch or the environment. With `"blind": false`, it also gets `EVAL_CONFIG` and `EVAL_RUN_ID`. The clone of a blind grader holds the base commit and the task setup, never the files of the config (its CLAUDE.md, its skills, `remove`, `files`). Every diff is then judged against the same instruction files. A diff that changes a file of the config setup does not apply on the base: its grade has the status `error`. A grader with `"blind": false` gets the clone of the config.
 
+**Samples.** One sample of a model review is noisy: the same diff can get a finding in one sample and none in the next. With `"samples": 3`, the runner runs the command three times per diff and merges the samples to one verdict, `flagged`. The samples of a run share one clone and one grade id. A sample can see the files that an earlier sample wrote in the clone. `EVAL_SAMPLE` tells the samples apart.
+
+- The grade is `ok` when more than half of the samples that ran are `ok`. Else it takes the worst status of its samples: `error`, then `timeout`. With two samples, one `ok` and one `error` give an `error` grade.
+- `majority` flags the diff when more than half of the `ok` samples have one finding or more. `union` flags it when one `ok` sample has one finding or more. With two samples and `majority`, one sample with findings does not flag the diff.
+- `findings` holds the findings of all samples. Each finding gets `sample`, the index of the sample that gave it.
+- `samples` holds one summary per sample: `status`, `findings` (the count), and when known `costUsd`, `durationMs` and `note`.
+- `costUsd` is the sum of the sample costs: a grader with N samples costs N times a grader with one sample.
+- The log `grade-<name>.log` holds the output of each sample, after a `[sample <index>]` line.
+- The progress line gives the `ok` samples, the verdict and the findings: `[2/6] 3f9a1c2e review ok, 3/3 samples, flagged, 4 findings, 1.62 $`.
+
 **Pattern grader.** No clone and no process. The runner reads the added lines of `diff.patch`. Each `rules` entry gives one finding per added line that its `pattern` matches, in a file that its `paths` matches (default: every file). The finding names the file, the line number in the new file and the trimmed line, 200 characters at most. Each `require` entry gives one finding when no changed file matches its `paths`. A deleted file does not count.
 
-**Budget.** `budget.gradersUsd` caps the cost of the command graders in one pass. The cost of a grade is the `costUsd` that its command prints, 0 when it prints none. When the sum of the costs reaches the cap, the remaining command grades get the status `budget`. Pattern graders cost nothing.
+**Budget.** `budget.gradersUsd` caps the cost of the command graders in one pass. The cost of a grade is the `costUsd` that its command prints, 0 when it prints none. When the sum of the costs reaches the cap, the remaining command grades get the status `budget`. The runner checks the cap before each sample: a sample does not start after the cap is reached. Its summary gets the status `budget`, and the grade merges the samples that ran. A grade with no sample run gets the status `budget`. Pattern graders cost nothing.
 
-**Cache.** An `ok` command grade goes to `eval-runner/out/cache/grades/`. A later pass reuses it when the diff, the grader, the base commit and the spec folder are the same (and the config, for a grader that is not blind). A reused grade has `cached: true` and costs nothing. The script of the command does not count: after you change it, pass `--force`.
+**Cache.** An `ok` command grade goes to `eval-runner/out/cache/grades/`, except a grade with a sample that the budget stopped. A later pass reuses the whole grade when the diff, the grader, the base commit and the spec folder are the same (and the config, for a grader that is not blind). `samples` and `merge` are part of the grader, but with one sample they do not count: the grade of a grader without them stays valid. A reused grade has `cached: true` and costs nothing. The script of the command does not count: after you change it, pass `--force`.
 
-Each grade has `status` (`ok`, `error`, `timeout`, `budget` or `skipped`), `findings`, and when known `id`, `costUsd`, `durationMs`, `note` and `cached`. Per config, `eval.json` adds `grades.<name>`: `graded` (the runs with an `ok` grade), `withFindings`, `findings` and `bySeverity`. The "Comparaison" panel of the viewer shows one row per grader: the runs with findings out of the graded runs.
+Each grade has `status` (`ok`, `error`, `timeout`, `budget` or `skipped`), `findings`, and when known `id`, `flagged`, `samples`, `costUsd`, `durationMs`, `note` and `cached`. Every `ok` grade has `flagged`: with one sample, or for a pattern grader, it is `true` when the grade has one finding or more. Per config, `eval.json` adds `grades.<name>`: `graded` (the runs with an `ok` grade), `withFindings` (the flagged runs among them), `findings` and `bySeverity` (over the findings of all samples). With `majority`, a run can have findings and no flag, so the summary can say `0/1 runs with findings, 1 finding`. A grade of an older version has no `flagged`: one finding or more counts it in `withFindings`. The "Comparaison" panel of the viewer shows one row per grader: the runs with findings out of the graded runs.
 
 ### Measure a change to a CLAUDE.md, an AGENTS.md or a skill
 
