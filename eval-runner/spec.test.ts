@@ -195,3 +195,14 @@ test('remove takes relative paths inside the clone, for any agent', () => {
 	for (const path of ['/etc', '../up', 'a/../b', '.git/config', 'a//b', '.']) failure(withConfig({ remove: [path] }), 'configs[0].remove');
 });
 
+test('files maps relative paths inside the clone to a text or a file, for any agent', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.deepEqual(validateSpec(withConfig({ agent: 'codex', files: { 'AGENTS.md': { file: 'lite.md' }, 'apps/bff/AGENTS.md': { text: 'x' } } }), '/specs/demo').configs[0].files, {
+		'AGENTS.md': { file: '/specs/demo/lite.md' },
+		'apps/bff/AGENTS.md': { text: 'x' }
+	});
+	failure(withConfig({ files: { 'AGENTS.md': { text: 'a', file: 'b' } } }), 'configs[0].files.AGENTS.md');
+	failure(withConfig({ files: ['AGENTS.md'] }), 'configs[0].files');
+	for (const path of ['/etc/x', '../up', 'a/../b', '.git/config', 'a//b', '.']) failure(withConfig({ files: { [path]: { text: 'x' } } }), 'configs[0].files');
+});
+
