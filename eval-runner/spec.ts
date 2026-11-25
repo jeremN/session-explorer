@@ -41,6 +41,9 @@ export type Config = {
 	// Paths of the task repository that the runner deletes from the clone before the setup commit, such as the
 	// committed harness of the team (AGENTS.md, .claude). A config without them measures the repository bare.
 	remove?: string[];
+	// Files the runner writes into the clone before the setup commit, by relative path: a variant of a committed
+	// AGENTS.md, for example. The file keeps its path, so it never masks the instruction files of other directories.
+	files?: Record<string, { text: string } | { file: string }>;
 	plugins?: string[];
 	permissionMode?: PermissionMode;
 	allowedTools?: string[];
@@ -173,7 +176,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'remove', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
+		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'remove', 'files', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -198,13 +201,24 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			const value = optional(config[key], `${at}.${key}`, strings);
 			if (value) result[key] = value.map((path) => resolve(dir, path));
 		}
+		const insideClone = (path: string, field: string) => {
+			const parts = path.split('/');
+			if (path.startsWith('/') || parts.includes('..') || parts.includes('') || parts.includes('.') || parts[0] === '.git') fail(field, `${path} must be a relative path inside the clone, outside .git`);
+		};
 		const remove = optional(config.remove, `${at}.remove`, strings);
 		if (remove) {
-			for (const path of remove) {
-				const parts = path.split('/');
-				if (path.startsWith('/') || parts.includes('..') || parts.includes('') || parts.includes('.') || parts[0] === '.git') fail(`${at}.remove`, `${path} must be a relative path inside the clone, outside .git`);
-			}
+			for (const path of remove) insideClone(path, `${at}.remove`);
 			result.remove = remove;
+		}
+		if (config.files !== undefined && config.files !== null) {
+			if (!isObject(config.files)) fail(`${at}.files`, 'required object of path to { text } or { file }');
+			result.files = {};
+			for (const [path, value] of Object.entries(config.files as Record<string, unknown>)) {
+				insideClone(path, `${at}.files`);
+				const entry = object(value, `${at}.files.${path}`, ['text', 'file']);
+				if ((entry.text === undefined) === (entry.file === undefined)) fail(`${at}.files.${path}`, 'set exactly one of text and file');
+				result.files[path] = entry.text !== undefined ? { text: string(entry.text, `${at}.files.${path}.text`) } : { file: resolve(dir, string(entry.file, `${at}.files.${path}.file`)) };
+			}
 		}
 		for (const key of ['allowedTools', 'disallowedTools'] as const) {
 			const value = optional(config[key], `${at}.${key}`, strings);

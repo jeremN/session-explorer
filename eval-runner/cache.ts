@@ -31,6 +31,8 @@ export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task:
 		const md = rest[field] as { file?: string } | undefined;
 		if (md?.file) files[field] = { content: contentOf(md.file) };
 	}
+	const replaced = rest.files as Record<string, { file?: string; text?: string }> | undefined;
+	if (replaced) files.files = Object.fromEntries(Object.entries(replaced).map(([path, entry]) => [path, entry.file ? { content: contentOf(entry.file) } : entry]));
 	for (const field of ['settings', 'mcpConfig'] as const) if (typeof rest[field] === 'string') files[field] = { content: contentOf(rest[field] as string) };
 	for (const field of ['skills', 'plugins'] as const) if (Array.isArray(rest[field])) files[field] = (rest[field] as string[]).map((path) => contentOf(path));
 	const prompt = task.prompt ?? (task.promptFile ? contentOf(task.promptFile) : '');
