@@ -89,15 +89,18 @@ async function git(cwd: string, ...args: string[]) {
 }
 
 // The grader script writes what it saw next to it, then prints its findings. Its first argument picks a behavior.
+// `first` finds something in sample 0 only. `fail-second` fails in sample 1 only.
 const GRADER = `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const mode = process.argv[2];
+const sample = process.env.EVAL_SAMPLE;
 if (mode === 'bad') { console.log('not json'); process.exit(0); }
-if (mode === 'fail') { console.error('boom'); process.exit(3); }
+if (mode === 'fail' || (mode === 'fail-second' && sample === '1')) { console.error('boom'); process.exit(3); }
 if (mode === 'slow') await new Promise((wake) => setTimeout(wake, 5000));
 const id = process.env.EVAL_GRADE_ID;
-writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '.json'), JSON.stringify({ id, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), env: process.env }));
-console.log(JSON.stringify({ findings: [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1, extra: 'dropped' }], costUsd: 0.4 }));
+writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '-' + sample + '.json'), JSON.stringify({ id, sample, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), env: process.env }));
+const findings = mode === 'first' && sample !== '0' ? [] : [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1, extra: 'dropped' }];
+console.log(JSON.stringify({ findings, costUsd: 0.4 }));
 `;
 
 // A repo at its base commit, a saved eval of two configs, and a grader script in the spec folder. The config names and
@@ -288,4 +291,110 @@ test('a non-blind grader gets the config and the run id; --spec must name the sa
 	assert.equal((await quiet(() => main([evalDir, '--graders', 'ghost']))).code, 2);
 	assert.equal((await quiet(() => main([evalDir, '--nope']))).code, 2);
 	assert.equal((await quiet(() => main([join(root, 'nowhere')]))).code, 2);
+});
+
+type SampledGrade = { status: string; id: string; findings: { sample?: number }[]; flagged?: boolean; costUsd?: number; note?: string; cached?: boolean; samples?: { status: string; findings: number; costUsd?: number; durationMs?: number; note?: string }[] };
+const HARD_CODED = { severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1 };
+const near = (actual: number | undefined, expected: number) => assert.ok(actual !== undefined && Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
+
+test('samples run the grader N times in one clone with one grade id; majority and union merge the samples to one verdict', async () => {
+	const { specDir, evalDir } = await fixture('samples', [{ ...review('first'), name: 'majority', samples: 3 }, { ...review('first'), name: 'union', samples: 3, merge: 'union' }, review('ok')]);
+	const { code, lines } = await quiet(() => main([evalDir, '--runs', 'zebra-config-1']));
+	assert.equal(code, 0, lines.join('\n'));
+	const grades: Record<string, SampledGrade> = saved(evalDir).runs[0].grades;
+
+	// Only sample 0 finds something: one sample of three is no majority, but it is enough for a union.
+	assert.equal(grades.majority.status, 'ok');
+	assert.equal(grades.majority.flagged, false);
+	assert.deepEqual(grades.majority.findings, [{ ...HARD_CODED, sample: 0 }]);
+	assert.equal(grades.union.flagged, true);
+	assert.deepEqual(grades.union.findings, [{ ...HARD_CODED, sample: 0 }]);
+	// One summary per sample, and the cost of the grade is the sum of the sample costs.
+	assert.deepEqual(grades.majority.samples!.map(({ status, findings, costUsd }) => ({ status, findings, costUsd })), [
+		{ status: 'ok', findings: 1, costUsd: 0.4 },
+		{ status: 'ok', findings: 0, costUsd: 0.4 },
+		{ status: 'ok', findings: 0, costUsd: 0.4 }
+	]);
+	for (const sample of grades.majority.samples!) assert.equal(typeof sample.durationMs, 'number');
+	near(grades.majority.costUsd, 1.2);
+	// One sample: flagged is set too, and the grade keeps the shape it had before samples existed.
+	assert.equal(grades.review.flagged, true);
+	assert.deepEqual(grades.review.findings, [HARD_CODED]);
+	assert.equal('samples' in grades.review, false);
+
+	// The samples of a grade share its id and its clone, and each knows its index.
+	const views = seen(specDir).filter((view) => view.id === grades.majority.id);
+	assert.deepEqual(views.map((view) => view.env.EVAL_SAMPLE).sort(), ['0', '1', '2']);
+	assert.equal(new Set(views.map((view) => view.cwd)).size, 1);
+	assert.equal(seen(specDir).find((view) => view.id === grades.review.id).env.EVAL_SAMPLE, '0');
+	assert.match(readFileSync(join(evalDir, 'runs', 'zebra-config-1', 'grade-majority.log'), 'utf8'), /\[sample 0\][^]*\[sample 1\][^]*\[sample 2\]/);
+
+	// The stats count the flagged runs, and the findings of the union.
+	const stats = saved(evalDir).configs[0].grades;
+	assert.deepEqual(stats.majority, { graded: 1, withFindings: 0, findings: 1, bySeverity: { minor: 1 } });
+	assert.deepEqual(stats.union, { graded: 1, withFindings: 1, findings: 1, bySeverity: { minor: 1 } });
+
+	assert.ok(lines.some((line) => /^\[\d\/3\] [0-9a-f]{8} majority ok, 3\/3 samples, not flagged, 1 finding, 1\.2 \$$/.test(line)), lines.join('\n'));
+	assert.ok(lines.some((line) => /^\[\d\/3\] [0-9a-f]{8} union ok, 3\/3 samples, flagged, 1 finding, 1\.2 \$$/.test(line)), lines.join('\n'));
+	assert.ok(lines.some((line) => /^\[\d\/3\] [0-9a-f]{8} review ok, 1 finding, 0\.4 \$$/.test(line)), lines.join('\n'));
+
+	// A second pass reuses the whole grade from the cache.
+	const again = await quiet(() => main([evalDir, '--runs', 'zebra-config-1']));
+	assert.equal(seen(specDir).length, 7);
+	const cached: SampledGrade = saved(evalDir).runs[0].grades.majority;
+	assert.equal(cached.cached, true);
+	assert.equal(cached.samples!.length, 3);
+	assert.ok(again.lines.some((line) => / majority ok, 3\/3 samples, not flagged, 1 finding, cached$/.test(line)), again.lines.join('\n'));
+});
+
+test('a failing sample among ok ones keeps the grade ok; without a majority of ok samples the grade is an error', async () => {
+	const { evalDir } = await fixture('flaky', [{ ...review('fail-second'), name: 'flaky', samples: 3 }, { ...review('fail-second'), name: 'even', samples: 2 }]);
+	const { code } = await quiet(() => main([evalDir, '--runs', 'zebra-config-1']));
+	assert.equal(code, 1);
+	const grades: Record<string, SampledGrade> = saved(evalDir).runs[0].grades;
+	assert.equal(grades.flaky.status, 'ok');
+	assert.equal(grades.flaky.flagged, true);
+	assert.deepEqual(grades.flaky.samples!.map((sample) => sample.status), ['ok', 'error', 'ok']);
+	assert.match(grades.flaky.samples![1].note!, /exit code 3.*boom/);
+	assert.deepEqual(grades.flaky.findings.map((finding) => finding.sample), [0, 2]);
+	near(grades.flaky.costUsd, 0.8);
+	// One ok sample of two is no majority.
+	assert.equal(grades.even.status, 'error');
+	assert.match(grades.even.note!, /exit code 3.*boom/);
+	assert.deepEqual(grades.even.samples!.map((sample) => sample.status), ['ok', 'error']);
+});
+
+test('the budget stops a grade between two samples, and a grade with no sample run gets the status budget', async () => {
+	// A sample costs 0.4 $: two samples reach the 0.5 $ budget, so the third sample and the next grade do not run.
+	const { specDir, evalDir } = await fixture('sample-budget', [{ ...review('ok'), samples: 3 }], { gradersUsd: 0.5 });
+	assert.equal((await quiet(() => main([evalDir]))).code, 0);
+	assert.equal(seen(specDir).length, 2);
+	const grades: SampledGrade[] = saved(evalDir).runs.flatMap((run: { grades: { review: SampledGrade } }) => (run.grades.review.status === 'skipped' ? [] : [run.grades.review]));
+	const partial = grades.find((grade) => grade.status === 'ok')!;
+	assert.deepEqual(partial.samples!.map((sample) => sample.status), ['ok', 'ok', 'budget']);
+	near(partial.costUsd, 0.8);
+	assert.match(partial.note!, /2 of 3 samples/);
+	const stopped = grades.find((grade) => grade.status !== 'ok')!;
+	assert.equal(stopped.status, 'budget');
+	// A grade with a sample cut by the budget does not go to the cache: the next pass runs all its samples.
+	assert.equal(existsSync(join(evalDir, '..', 'cache', 'grades')), false);
+});
+
+test('samples 1 and merge majority keep the cache key of a grader without them', async () => {
+	const { specDir, evalDir } = await fixture('sample-key', [review('ok')]);
+	assert.equal((await quiet(() => main([evalDir, '--runs', 'zebra-config-1']))).code, 0);
+	const ev = saved(evalDir);
+	ev.spec.graders = [review('ok', { samples: 1, merge: 'majority' })];
+	writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(ev));
+	// A grade from the cache of an older version has no flagged: the runner sets it from the findings.
+	const cacheDir = join(evalDir, '..', 'cache', 'grades');
+	for (const file of readdirSync(cacheDir)) {
+		const entry = JSON.parse(readFileSync(join(cacheDir, file), 'utf8'));
+		delete entry.grade.flagged;
+		writeFileSync(join(cacheDir, file), JSON.stringify(entry));
+	}
+	assert.equal((await quiet(() => main([evalDir, '--runs', 'zebra-config-1']))).code, 0);
+	assert.equal(seen(specDir).length, 1);
+	assert.equal(saved(evalDir).runs[0].grades.review.cached, true);
+	assert.equal(saved(evalDir).runs[0].grades.review.flagged, true);
 });

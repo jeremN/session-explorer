@@ -85,3 +85,15 @@ test('aggregate counts the graded runs, the runs with findings and the findings 
 	// A config with no grade keeps the shape it had before graders existed.
 	assert.equal('grades' in result.c, false);
 });
+
+test('a grade with flagged counts as a run with findings by its flag; an old grade without flagged counts by its findings', () => {
+	const finding = { severity: 'minor', summary: 'x' };
+	const runs: RunRecord[] = [
+		// Majority merge: one sample of three found something, so the run is not flagged. Its finding still counts.
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [{ ...finding, sample: 0 }], flagged: false } } },
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [{ ...finding, sample: 1 }, { ...finding, sample: 2 }], flagged: true } } },
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [finding] } } },
+		{ ...run('a', 'ok', 1, true), grades: { review: { status: 'ok', findings: [] } } }
+	];
+	assert.deepEqual(aggregate(runs, ['a']).a.grades, { review: { graded: 4, withFindings: 2, findings: 4, bySeverity: { minor: 4 } } });
+});

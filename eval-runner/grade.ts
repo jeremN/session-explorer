@@ -2,8 +2,9 @@
 // grader says what is wrong with a change that passed.
 // A command grader is a process. It gets a new clone of the change (the base, the setup files of the config, the setup
 // command, diff.patch) and prints its findings as JSON. Blind, it never sees the config name or the run id: the clone,
-// the copy of the patch and the environment name only a random grade id. A pattern grader reads the added lines of
-// diff.patch, with no clone and no process.
+// the copy of the patch and the environment name only a random grade id. With samples, the command runs that many times
+// in the same clone, and the grade merges the samples to one verdict, `flagged`. A pattern grader reads the added lines
+// of diff.patch, with no clone and no process.
 // Usage: node eval-runner/grade.ts <evalDir> [--graders <name>[,<name>]] [--runs <id>[,<id>]] [--spec <spec.json>] [--force]
 //   --spec takes the graders and budget.gradersUsd of that spec. It must name the same task: same repo, base and prompt.
 //   --force runs every grader again, even when the grade cache holds its result.
@@ -17,9 +18,9 @@ import { setupFiles } from './command.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { loadSpec } from './spec.ts';
-import type { CommandGrader, Config, Grader, PatternGrader, Spec } from './spec.ts';
+import type { CommandGrader, Config, Grader, GraderMerge, PatternGrader, Spec } from './spec.ts';
 import { gradeStats } from './stats.ts';
-import type { Finding, Grade, RunRecord } from './stats.ts';
+import type { Finding, Grade, GradeSample, RunRecord } from './stats.ts';
 import { rebuildRun, removeWorkspace } from './workspace.ts';
 
 const USAGE = 'Usage: node eval-runner/grade.ts <evalDir> [--graders <name>[,<name>]] [--runs <id>[,<id>]] [--spec <spec.json>] [--force]';
@@ -33,6 +34,7 @@ type Obj = Record<string, unknown>;
 const isObject = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 const dollars = (value: number) => Math.round(value * 100) / 100;
+const micro = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 
 type Section = { path?: string; deleted: boolean; header: boolean };
 type AddedLine = { file: string; line: number; text: string };
@@ -162,13 +164,69 @@ function shuffle<T>(items: T[], seedText: string): T[] {
 }
 
 // A grade is reused when the grader would get the same thing again. A blind grader never sees the config. An open one
-// does, so the config counts in its key.
+// does, so the config counts in its key. With one sample, `samples` and `merge` change nothing: they stay out of the
+// key, so the key is the one of a grader without them.
 function gradeKey(target: GradeTarget, grader: CommandGrader, diff: string, config: Config | undefined) {
-	return sha(JSON.stringify({ schema: SCHEMA, baseSha: target.baseSha, diff: sha(diff), grader, specDir: target.spec.dir, ...(grader.blind ? {} : { config: config ?? null }) }));
+	const { samples = 1, merge = 'majority', ...rest } = grader;
+	const definition = samples > 1 ? { ...rest, samples, merge } : rest;
+	return sha(JSON.stringify({ schema: SCHEMA, baseSha: target.baseSha, diff: sha(diff), grader: definition, specDir: target.spec.dir, ...(grader.blind ? {} : { config: config ?? null }) }));
 }
 
-async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader, run: RunRecord, patch: string, id: string): Promise<Grade> {
+// The cost of the command grades in one pass of grade.ts, and its cap. The samples of a grade add to it one by one.
+type Budget = { spent: number; cap?: number };
+// What one sample of the command gave. `log` is its stdout and its stderr.
+type SampleResult = { status: 'ok' | 'error' | 'timeout'; findings: Finding[]; costUsd?: number; durationMs: number; note?: string; log: string };
+
+async function runSample(exec: Exec, grader: CommandGrader, cwd: string, env: Record<string, string>): Promise<SampleResult> {
+	const started = Date.now();
+	const done = await exec('sh', ['-c', grader.command], { cwd, env, timeoutMs: grader.timeoutSec * 1000 });
+	const durationMs = Date.now() - started;
+	const log = done.stdout + (done.stderr ? `\n[stderr]\n${done.stderr}` : '');
+	if (done.timedOut) return { status: 'timeout', findings: [], durationMs, note: `no result after ${grader.timeoutSec} s`, log };
+	if (done.code !== 0) return { status: 'error', findings: [], durationMs, note: `exit code ${done.code}: ${done.stderr.trim().slice(-200)}`, log };
+	const output = graderOutput(done.stdout);
+	if (typeof output === 'string') return { status: 'error', findings: [], durationMs, note: output, log };
+	return { status: 'ok', findings: output.findings, ...(output.costUsd === undefined ? {} : { costUsd: output.costUsd }), durationMs, log };
+}
+
+// One grade from the samples that ran. The grade is ok when more than half of them are ok, else it takes the worst
+// status: error before timeout. `union` flags the diff when one ok sample has a finding, `majority` when more than half of
+// the ok samples have one.
+function mergeSamples(results: SampleResult[], samples: number, merge: GraderMerge, id: string): Grade {
+	if (samples === 1) {
+		const [{ status, findings, costUsd, durationMs, note }] = results;
+		if (status !== 'ok') return { status, id, findings: [], durationMs, note };
+		return { status, id, findings, flagged: findings.length > 0, ...(costUsd === undefined ? {} : { costUsd }), durationMs };
+	}
+	const ok = results.filter((result) => result.status === 'ok');
+	const status = ok.length * 2 > results.length ? 'ok' : results.some((result) => result.status === 'error') ? 'error' : 'timeout';
+	const withFindings = ok.filter((result) => result.findings.length > 0).length;
+	const flagged = merge === 'union' ? withFindings > 0 : withFindings * 2 > ok.length;
+	const costs = results.flatMap((result) => (result.costUsd === undefined ? [] : [result.costUsd]));
+	const summaries: GradeSample[] = results.map((result) => ({ status: result.status, findings: result.findings.length, ...(result.costUsd === undefined ? {} : { costUsd: result.costUsd }), durationMs: result.durationMs, ...(result.note === undefined ? {} : { note: result.note }) }));
+	const stopped: GradeSample[] = Array.from({ length: samples - results.length }, () => ({ status: 'budget', findings: 0 }));
+	const failed = results.findIndex((result) => result.status !== 'ok');
+	const notes = [
+		...(status === 'ok' ? [] : [`${ok.length} of ${results.length} samples ok, sample ${failed}: ${results[failed].note}`]),
+		...(stopped.length ? [`${results.length} of ${samples} samples ran: the graders budget is spent`] : [])
+	];
+	return {
+		status,
+		id,
+		findings: results.flatMap((result, sample) => result.findings.map((finding) => ({ ...finding, sample }))),
+		...(status === 'ok' ? { flagged } : {}),
+		samples: [...summaries, ...stopped],
+		...(costs.length ? { costUsd: micro(costs.reduce((sum, cost) => sum + cost, 0)) } : {}),
+		durationMs: results.reduce((sum, result) => sum + result.durationMs, 0),
+		...(notes.length ? { note: notes.join('; ') } : {})
+	};
+}
+
+// The samples of a grade share one clone and one grade id. EVAL_SAMPLE tells them apart. The budget stops the samples
+// one by one: a sample does not start once the spent cost reaches the cap.
+async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader, run: RunRecord, patch: string, id: string, budget: Budget): Promise<Grade> {
 	const config = target.spec.configs.find((entry) => entry.name === run.config) ?? { name: run.config };
+	const samples = grader.samples ?? 1;
 	// Every path the grader gets is random or named by the grade id, never by the run.
 	const clone = mkdtempSync(join(tmpdir(), 'eval-grade-'));
 	const gitDir = mkdtempSync(join(tmpdir(), 'eval-grade-git-'));
@@ -180,17 +238,18 @@ async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader
 		// judged against the same instruction files, and the clone does not reveal the config.
 		await rebuildRun(exec, { task: target.spec.task, baseSha: target.baseSha, specDir: target.spec.dir, setup: setupFiles(grader.blind ? { name: 'base' } : config), patch: diff, dir: clone, gitDir });
 		const env = { EVAL_GRADE_ID: id, EVAL_BASE: target.baseSha, EVAL_DIFF: diff, EVAL_SPEC_DIR: target.spec.dir, ...(grader.blind ? {} : { EVAL_CONFIG: run.config, EVAL_RUN_ID: run.id }) };
-		const started = Date.now();
-		const result = await exec('sh', ['-c', grader.command], { cwd: clone, env, timeoutMs: grader.timeoutSec * 1000 });
-		const durationMs = Date.now() - started;
+		const results: SampleResult[] = [];
+		for (let sample = 0; sample < samples; sample++) {
+			if (sample > 0 && budget.cap !== undefined && budget.spent >= budget.cap) break;
+			const result = await runSample(exec, grader, clone, { ...env, EVAL_SAMPLE: String(sample) });
+			// A grader that prints no cost costs nothing toward the budget.
+			budget.spent += result.costUsd ?? 0;
+			results.push(result);
+		}
 		const runDir = join(target.evalDir, 'runs', run.id);
 		mkdirSync(runDir, { recursive: true });
-		writeFileSync(join(runDir, `grade-${grader.name}.log`), result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : ''));
-		if (result.timedOut) return { status: 'timeout', id, findings: [], durationMs, note: `no result after ${grader.timeoutSec} s` };
-		if (result.code !== 0) return { status: 'error', id, findings: [], durationMs, note: `exit code ${result.code}: ${result.stderr.trim().slice(-200)}` };
-		const output = graderOutput(result.stdout);
-		if (typeof output === 'string') return { status: 'error', id, findings: [], durationMs, note: output };
-		return { status: 'ok', id, findings: output.findings, ...(output.costUsd === undefined ? {} : { costUsd: output.costUsd }), durationMs };
+		writeFileSync(join(runDir, `grade-${grader.name}.log`), samples === 1 ? results[0].log : results.map((result, sample) => `[sample ${sample}]\n${result.log}`).join('\n'));
+		return mergeSamples(results, samples, grader.merge ?? 'majority', id);
 	} catch (error) {
 		return { status: 'error', id, findings: [], note: (error as Error).message.slice(0, 300) };
 	} finally {
@@ -205,7 +264,8 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 function describe(grade: Grade) {
 	if (grade.status !== 'ok') return `${grade.status}: ${grade.note ?? ''}`;
 	const cost = grade.cached ? ', cached' : grade.costUsd === undefined ? '' : `, ${dollars(grade.costUsd)} $`;
-	return `ok, ${plural(grade.findings.length, 'finding')}${cost}`;
+	const samples = grade.samples ? `${grade.samples.filter((sample) => sample.status === 'ok').length}/${grade.samples.length} samples, ${grade.flagged ? 'flagged' : 'not flagged'}, ` : '';
+	return `ok, ${samples}${plural(grade.findings.length, 'finding')}${cost}`;
 }
 
 // Grades the runs in place, in a shuffled order, so a grader meets the configs interleaved. A progress line names the
@@ -213,7 +273,7 @@ function describe(grade: Grade) {
 export async function gradeRuns(target: GradeTarget, { exec = realExec, graders: only, runs: onlyRuns, force = false }: GradeOptions = {}): Promise<{ errors: number; spentUsd: number }> {
 	const graders = (target.spec.graders ?? []).filter((grader) => !only || only.includes(grader.name));
 	const cacheDir = join(dirname(target.evalDir), 'cache', 'grades');
-	const budget = target.spec.budget?.gradersUsd;
+	const budget: Budget = { spent: 0, cap: target.spec.budget?.gradersUsd };
 	const todo: { run: RunRecord; patch: string; diff: string }[] = [];
 	for (const run of target.runs.filter((entry) => !onlyRuns || onlyRuns.includes(entry.id))) {
 		const patch = patchOf(target.evalDir, run);
@@ -223,22 +283,25 @@ export async function gradeRuns(target: GradeTarget, { exec = realExec, graders:
 		else todo.push({ run, patch: patch!, diff });
 	}
 	const pairs = shuffle(todo, target.evalId).flatMap((item) => graders.map((grader) => ({ ...item, grader })));
-	let spent = 0;
 	let errors = 0;
 	for (const [position, { run, patch, diff, grader }] of pairs.entries()) {
 		const id = randomBytes(4).toString('hex');
 		let grade: Grade;
-		if (grader.kind === 'pattern') grade = { status: 'ok', id, findings: patternFindings(grader, diff) };
-		else {
+		if (grader.kind === 'pattern') {
+			const findings = patternFindings(grader, diff);
+			grade = { status: 'ok', id, findings, flagged: findings.length > 0 };
+		} else {
 			const config = target.spec.configs.find((entry) => entry.name === run.config);
 			const file = join(cacheDir, `${gradeKey(target, grader, diff, config)}.json`);
-			if (!force && existsSync(file)) grade = { ...(JSON.parse(readFileSync(file, 'utf8')) as { grade: Grade }).grade, cached: true };
-			else if (budget !== undefined && spent >= budget) grade = { status: 'budget', id, findings: [], note: 'the graders budget is spent' };
+			if (!force && existsSync(file)) {
+				// A grade cached by an older version has no flagged.
+				const cached = (JSON.parse(readFileSync(file, 'utf8')) as { grade: Grade }).grade;
+				grade = { ...cached, flagged: cached.flagged ?? cached.findings.length > 0, cached: true };
+			} else if (budget.cap !== undefined && budget.spent >= budget.cap) grade = { status: 'budget', id, findings: [], note: 'the graders budget is spent' };
 			else {
-				grade = await runCommand(exec, target, grader, run, patch, id);
-				// A grader that prints no cost costs nothing toward the budget.
-				spent += grade.costUsd ?? 0;
-				if (grade.status === 'ok') {
+				grade = await runCommand(exec, target, grader, run, patch, id, budget);
+				// A grade with a sample that the budget stopped stays out of the cache: the next pass runs all its samples.
+				if (grade.status === 'ok' && !grade.samples?.some((sample) => sample.status === 'budget')) {
 					mkdirSync(cacheDir, { recursive: true });
 					writeFileSync(file, JSON.stringify({ evalId: target.evalId, grade }));
 				}
@@ -260,8 +323,8 @@ export async function gradeRuns(target: GradeTarget, { exec = realExec, graders:
 		});
 	});
 	if (lines.length) console.log(`Findings per config:\n${lines.join('\n')}`);
-	if (graders.some((grader) => grader.kind === 'command')) console.log(`Graders spent ${dollars(spent)} $.`);
-	return { errors, spentUsd: spent };
+	if (graders.some((grader) => grader.kind === 'command')) console.log(`Graders spent ${dollars(budget.spent)} $.`);
+	return { errors, spentUsd: budget.spent };
 }
 
 type SavedEval = { id: string; baseSha: string; spec: GradeTarget['spec']; configs?: { name: string; grades?: unknown }[]; runs: RunRecord[] };

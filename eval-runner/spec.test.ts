@@ -253,3 +253,15 @@ test('graders: unknown field, duplicate or bad name, bad kind, bad regex and an 
 	failure({ ...base(), budget: { perRunUsd: 1, perEvalUsd: 6, gradersUsd: 0 } }, 'spec.budget.gradersUsd');
 });
 
+test('graders: a command grader takes samples from 1 to 5 and merge majority or union; a pattern grader takes neither', () => {
+	const command = (extra: Record<string, unknown>) => ({ ...base(), graders: [{ name: 'r', kind: 'command', command: 'true', ...extra }] });
+	assert.deepEqual(validateSpec(command({ samples: 3, merge: 'union' }), '/s').graders![0], { name: 'r', kind: 'command', command: 'true', timeoutSec: 1800, blind: true, samples: 3, merge: 'union' });
+	assert.deepEqual(validateSpec(command({ samples: 5 }), '/s').graders![0], { name: 'r', kind: 'command', command: 'true', timeoutSec: 1800, blind: true, samples: 5 });
+	assert.deepEqual(validateSpec(command({ samples: 1, merge: 'majority' }), '/s').graders![0], { name: 'r', kind: 'command', command: 'true', timeoutSec: 1800, blind: true, samples: 1, merge: 'majority' });
+	for (const samples of [0, 6, 2.5, '3']) failure(command({ samples }), 'spec.graders[0].samples');
+	failure(command({ samples: 3, merge: 'all' }), 'spec.graders[0].merge');
+	const pattern = (extra: Record<string, unknown>) => ({ ...base(), graders: [{ name: 'r', kind: 'pattern', rules: [{ name: 'x', pattern: 'a', severity: 'minor' }], ...extra }] });
+	failure(pattern({ samples: 2 }), 'spec.graders[0].samples');
+	failure(pattern({ merge: 'union' }), 'spec.graders[0].merge');
+});
+
