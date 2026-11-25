@@ -8,7 +8,8 @@ import type { Config } from './spec.ts';
 
 // `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
 // `localMd` becomes CLAUDE.local.md: Claude Code reads it with the CLAUDE.md of the project, as a user CLAUDE.md.
-type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string };
+// `remove` is deleted first, so a claudeMd or a skill of the config can take the place of a removed file.
+type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string; remove?: string[] };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
@@ -82,6 +83,11 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	await git(exec, dir, ['checkout', '-q', '--detach', baseSha]);
 	// FETCH_HEAD names the path of the source repository.
 	rmSync(join(dir, '.git', 'FETCH_HEAD'), { force: true });
+	for (const path of setup.remove ?? []) {
+		// rmSync removes a symlink itself, never its target; a symlinked parent would point the removal outside the clone.
+		refuseSymlinks(dir, path);
+		rmSync(join(dir, path), { recursive: true, force: true });
+	}
 	const instructions: [string, Config['claudeMd']][] = [[setup.instructionFile ?? 'CLAUDE.md', setup.claudeMd], ['CLAUDE.local.md', setup.localMd]];
 	for (const [file, md] of instructions) {
 		if (!md) continue;
