@@ -442,3 +442,25 @@ test('task.setup runs in the clone before the agent, stays out of the diff when 
 	assert.equal(run.status, 'error');
 	assert.match(run.note, /setup failed \(exit code 3\)/);
 });
+
+test('the graders of the spec grade every run after the eval, the run cache holds no grade, and --no-grade skips them', async () => {
+	const graders = [{ name: 'rules', kind: 'pattern', rules: [{ name: 'marker', pattern: 'agent was here', severity: 'minor' }] }];
+	const out = join(root, 'out-graders');
+	const result = await cli([writeSpec('graders', { runs: 1, graders }), '--claude', FAKE, '--out', out]);
+	assert.equal(result.code, 0, result.stderr);
+	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
+	for (const run of saved.runs) assert.deepEqual(run.grades.rules.findings, [{ severity: 'minor', rule: 'marker', file: 'agent-output.txt', line: 1, summary: 'agent was here: Make the change.' }]);
+	assert.deepEqual(saved.configs[0].grades, { rules: { graded: 1, withFindings: 1, findings: 1, bySeverity: { minor: 1 } } });
+	assert.deepEqual(saved.spec.graders, [{ ...graders[0], require: [] }]);
+	assert.match(result.stdout, /\[1\/2\] [0-9a-f]{8} rules ok, 1 finding/);
+	assert.match(result.stdout.trimEnd().split('\n').at(-1)!, /^Spent /);
+	for (const file of readdirSync(join(out, 'cache')).filter((name) => name.endsWith('.jsonl'))) assert.doesNotMatch(readFileSync(join(out, 'cache', file), 'utf8'), /"grades"/);
+
+	const skipped = join(root, 'out-no-grade');
+	const plain = await cli([writeSpec('no-grade', { runs: 1, graders }), '--claude', FAKE, '--out', skipped, '--no-grade']);
+	assert.equal(plain.code, 0, plain.stderr);
+	const none = JSON.parse(readFileSync(join(evalDir(skipped), 'eval.json'), 'utf8'));
+	assert.equal(none.runs[0].grades, undefined);
+	assert.equal(none.configs[0].grades, undefined);
+	assert.doesNotMatch(plain.stdout, /rules ok/);
+});

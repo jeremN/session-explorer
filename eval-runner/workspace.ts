@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSy
 import { basename, dirname, join } from 'node:path';
 
 import type { Exec } from './exec.ts';
-import type { Config } from './spec.ts';
+import type { Config, Spec } from './spec.ts';
 
 // `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
 // `localMd` becomes CLAUDE.local.md: Claude Code reads it with the CLAUDE.md of the project, as a user CLAUDE.md.
@@ -129,6 +129,21 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 	cpSync(join(dir, '.git'), gitDir, { recursive: true, dereference: false, verbatimSymlinks: true });
 	chmodSync(gitDir, 0o700);
 	return { setupSha, fileMode };
+}
+
+// A new clone at the base, the setup files of the config, the setup command of the task, then the saved diff.patch of
+// a run. recheck.ts runs the check on it again, and grade.ts grades it.
+export async function rebuildRun(exec: Exec, { task, baseSha, specDir, setup, patch, dir, gitDir }: { task: Spec['task']; baseSha: string; specDir: string; setup: Setup; patch: string; dir: string; gitDir: string }) {
+	const workspace = await createWorkspace(exec, { repo: task.repo, baseSha, dir, gitDir, setup });
+	if (task.setup) {
+		const prepared = await exec('sh', ['-c', task.setup.command], { cwd: dir, env: { EVAL_SPEC_DIR: specDir }, timeoutMs: task.setup.timeoutSec * 1000 });
+		if (prepared.code !== 0 || prepared.timedOut) throw new Error(`setup failed: ${(prepared.stdout + prepared.stderr).trim().slice(-200)}`);
+	}
+	if (readFileSync(patch, 'utf8').trim()) {
+		const applied = await exec('git', ['apply', '--whitespace=nowarn', patch], { cwd: dir });
+		if (applied.code !== 0) throw new Error(`diff.patch does not apply: ${applied.stderr.trim().slice(0, 200)}`);
+	}
+	return workspace;
 }
 
 // Right before the diff, the runner replaces everything in its copy that can make git run code or read files elsewhere.

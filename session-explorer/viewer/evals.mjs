@@ -88,6 +88,17 @@ export function renderComparison(ev) {
 		const marked = present.length > 1 && !medians.every((value) => value === top);
 		tests = '<tr><th scope="row">Tests passés</th>' + shares.map((spread) => (spread ? metricCell(spread, 'testShare', scale, marked && spread.median === top) : '<td>—</td>')).join('') + '</tr>';
 	}
+	// One row per grader: the runs with findings out of the graded runs. Fewer is better, so the tone of passPill is reversed.
+	const graders = [...new Set(ev.configs.flatMap((config) => Object.keys(config.grades ?? {})))];
+	const graded = graders.map((name) => {
+		const cells = ev.configs.map((config) => {
+			const stats = config.grades?.[name];
+			if (!stats) return '<td>—</td>';
+			const tone = stats.graded === 0 ? 'neutral' : stats.withFindings === 0 ? 'positive' : stats.withFindings === stats.graded ? 'negative' : 'warning';
+			return '<td>' + pill(stats.withFindings + '/' + stats.graded, tone) + ' <span class="ev-range">' + stats.findings + ' constat' + (stats.findings === 1 ? '' : 's') + '</span></td>';
+		});
+		return '<tr><th scope="row">Constats ' + esc(name) + '</th>' + cells.join('') + '</tr>';
+	});
 	const rows = ROWS.flatMap(([key, label, , better]) => {
 		const all = ev.configs.flatMap((config) => config.metrics[key]?.values ?? []);
 		// A row where every run has 0 says nothing. Print and refusal counters stay at 0 in print mode.
@@ -97,7 +108,7 @@ export function renderComparison(ev) {
 		const cells = ev.configs.map((config, index) => (config.metrics[key] ? metricCell(config.metrics[key], key, scale, best.has(index)) : '<td>—</td>'));
 		return ['<tr><th scope="row">' + esc(label) + '</th>' + cells.join('') + '</tr>'];
 	});
-	return '<table class="ev-table"><thead>' + head + '</thead><tbody>' + pass + tests + rows.join('') + '</tbody></table>';
+	return '<table class="ev-table"><thead>' + head + '</thead><tbody>' + pass + tests + graded.join('') + rows.join('') + '</tbody></table>';
 }
 
 // The check of one run: the verdict, the share of its tests, and a mark when the check ran again on the saved diff.

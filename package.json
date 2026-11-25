@@ -19,6 +19,7 @@
     "eval:diff": "node eval-runner/diff.ts",
     "eval:image": "node eval-runner/container.ts",
     "eval:matrix": "node eval-runner/matrix.ts",
-    "eval:watch": "node eval-runner/watch.ts"
+    "eval:watch": "node eval-runner/watch.ts",
+    "eval:grade": "node eval-runner/grade.ts"
   }
 }

@@ -38,9 +38,17 @@ export type RunRecord = {
 	blockedHosts?: string[];
 	// A run reused from the cache: the eval and the run where its files are.
 	cached?: { evalId: string; id: string };
+	// The grade of each grader of the spec, by grader name (grade.ts).
+	grades?: Record<string, Grade>;
 };
+export type Finding = { severity: string; summary: string; file?: string; line?: number; rule?: string };
+// `id`: the blind grade id. The command grader saw it in place of the run id, so it links a grader report to the run.
+// `cached`: the grade comes from the grade cache, at no cost.
+export type Grade = { status: 'ok' | 'error' | 'timeout' | 'budget' | 'skipped'; id?: string; findings: Finding[]; costUsd?: number; durationMs?: number; note?: string; cached?: boolean };
+// Per grader: the runs with an ok grade, the runs with one finding or more among them, and their findings.
+export type GradeStats = { graded: number; withFindings: number; findings: number; bySeverity: Record<string, number> };
 export type Spread = { n: number; median: number; min: number; max: number; values: number[] };
-export type ConfigStats = { pass: { passed: number; n: number }; metrics: Record<string, Spread> };
+export type ConfigStats = { pass: { passed: number; n: number }; metrics: Record<string, Spread>; grades?: Record<string, GradeStats> };
 
 const round = (value: number) => Math.round(value * 10_000) / 10_000;
 
@@ -89,7 +97,24 @@ export function aggregate(runs: RunRecord[], configs: string[]): Record<string, 
 			const found = spread(own.map(pick).filter((value): value is number => value !== undefined));
 			if (found) metrics[key] = found;
 		}
-		result[name] = { pass: passRate(own), metrics };
+		const grades = gradeStats(own);
+		result[name] = { pass: passRate(own), metrics, ...(grades ? { grades } : {}) };
 	}
 	return result;
+}
+
+// Only an ok grade is a sample. Undefined when no run has a grade, so an eval without graders keeps its shape.
+export function gradeStats(runs: RunRecord[]): Record<string, GradeStats> | undefined {
+	const result: Record<string, GradeStats> = {};
+	for (const run of runs) {
+		for (const [name, grade] of Object.entries(run.grades ?? {})) {
+			const stats = (result[name] ??= { graded: 0, withFindings: 0, findings: 0, bySeverity: {} });
+			if (grade.status !== 'ok') continue;
+			stats.graded += 1;
+			if (grade.findings.length > 0) stats.withFindings += 1;
+			stats.findings += grade.findings.length;
+			for (const finding of grade.findings) stats.bySeverity[finding.severity] = (stats.bySeverity[finding.severity] ?? 0) + 1;
+		}
+	}
+	return Object.keys(result).length ? result : undefined;
 }

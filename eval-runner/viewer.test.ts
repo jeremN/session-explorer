@@ -141,3 +141,17 @@ test('the watch panel lists each watched file with its last verdict and a link t
 	assert.match(html, /AGENTS\.md-2.*copie seule/);
 });
 
+test('the comparison has one row per grader: the runs with findings out of the graded runs', () => {
+	const data = sample();
+	assert.doesNotMatch(renderEval(data), /Constats/);
+	Object.assign(data.configs[0], { grades: { review: { graded: 3, withFindings: 1, findings: 2, bySeverity: { minor: 2 } }, '<b>': { graded: 2, withFindings: 2, findings: 4, bySeverity: {} } } });
+	Object.assign(data.configs[1], { grades: { review: { graded: 3, withFindings: 0, findings: 0, bySeverity: {} } } });
+	const html = renderEval(data);
+	const row = html.split('<th scope="row">Constats review</th>')[1].split('</tr>')[0].split('<td');
+	assert.match(row[1], /data-tone="warning"[^>]*>1\/3</);
+	assert.match(row[2], /data-tone="positive"[^>]*>0\/3</);
+	const other = html.split('<th scope="row">Constats &lt;b&gt;</th>')[1].split('</tr>')[0].split('<td');
+	assert.match(other[1], /data-tone="negative"[^>]*>2\/2</);
+	assert.match(other[2], /—/);
+});
+
