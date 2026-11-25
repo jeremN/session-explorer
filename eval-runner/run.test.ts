@@ -456,6 +456,19 @@ test('the graders of the spec grade every run after the eval, the run cache hold
 	assert.match(result.stdout.trimEnd().split('\n').at(-1)!, /^Spent /);
 	for (const file of readdirSync(join(out, 'cache')).filter((name) => name.endsWith('.jsonl'))) assert.doesNotMatch(readFileSync(join(out, 'cache', file), 'utf8'), /"grades"/);
 
+	// recheck.ts copies the graded records into the run cache. A later eval reuses the runs without their grades, and
+	// its graders grade them again from the diff of the first eval.
+	const recheck = await realExec(process.execPath, [join(import.meta.dirname, 'recheck.ts'), evalDir(out)], { env: { TMPDIR: tmp }, timeoutMs: 60_000 });
+	assert.equal(recheck.code, 0, recheck.stderr);
+	const latest = () => JSON.parse(readFileSync(join(out, readdirSync(out).filter((name) => name !== 'index.json' && name !== 'cache').sort().at(-1)!, 'eval.json'), 'utf8'));
+	await new Promise((wake) => setTimeout(wake, 1100));
+	assert.equal((await cli([writeSpec('graders', { runs: 1, graders }), '--claude', FAKE, '--out', out, '--no-grade'])).code, 0);
+	const ungraded = latest();
+	assert.deepEqual(ungraded.runs.map((run: { cached?: unknown; grades?: unknown }) => [Boolean(run.cached), run.grades]), [[true, undefined], [true, undefined]]);
+	await new Promise((wake) => setTimeout(wake, 1100));
+	assert.equal((await cli([writeSpec('graders', { runs: 1, graders }), '--claude', FAKE, '--out', out])).code, 0);
+	for (const run of latest().runs) assert.equal(run.grades.rules.findings.length, 1);
+
 	const skipped = join(root, 'out-no-grade');
 	const plain = await cli([writeSpec('no-grade', { runs: 1, graders }), '--claude', FAKE, '--out', skipped, '--no-grade']);
 	assert.equal(plain.code, 0, plain.stderr);

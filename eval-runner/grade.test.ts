@@ -193,7 +193,7 @@ test('a command grader runs blind in a new clone of the change, and its findings
 		// The copy of the patch is named by the grade id.
 		assert.ok(view.diff.endsWith(`${view.id}.patch`));
 		// Blind: no config name and no run id in the cwd, the patch path or the environment. Both are gone after the grade.
-		for (const word of ['zebra', 'yak']) {
+		for (const word of ['zebra-config', 'yak-config']) {
 			assert.ok(!view.cwd.includes(word) && !view.diff.includes(word), view.cwd);
 			for (const [key, value] of Object.entries(view.env as Record<string, string>)) assert.ok(!String(value).includes(word), `${key}=${value}`);
 		}

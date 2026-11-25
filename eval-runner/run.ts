@@ -315,7 +315,8 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
 	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
-	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
+	// A reused run carries no grade: recheck.ts copies a graded record into the cache, and the graders of this spec grade it again.
+	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record: { grades: _grades, ...record } }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
 	const planned = planRuns(spec.configs, spec.runs, Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length])));
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 
@@ -360,23 +361,30 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	}
 
 	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
-	// The graders come after the run cache, so a cached run never carries a grade into a later eval.
-	if (spec.graders && !options.noGrade) await gradeRuns({ evalId, evalDir, baseSha, spec, runs }, { exec });
-	const stats = aggregate(runs, spec.configs.map((config) => config.name));
-	const saved = {
-		schema: 'eval-runner/v1',
-		id: evalId,
-		name: spec.name,
-		generatedAt: new Date().toISOString(),
-		cliVersion,
-		baseSha,
-		spec,
-		spent: dollars(spent),
-		configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name] })),
-		runs
+	const save = () => {
+		const stats = aggregate(runs, spec.configs.map((config) => config.name));
+		const saved = {
+			schema: 'eval-runner/v1',
+			id: evalId,
+			name: spec.name,
+			generatedAt: new Date().toISOString(),
+			cliVersion,
+			baseSha,
+			spec,
+			spent: dollars(spent),
+			configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name] })),
+			runs
+		};
+		writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
 	};
-	writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
+	save();
 	writeIndex(options.out);
+	// The graders come after the run cache, so a cached run never carries a grade into a later eval. eval.json exists
+	// before them: a grade pass that stops halfway loses only its grades, and grade.ts can run it again.
+	if (spec.graders && !options.noGrade) {
+		await gradeRuns({ evalId, evalDir, baseSha, spec, runs }, { exec });
+		save();
+	}
 	try {
 		rmdirSync(join(tmpdir(), 'eval-runner', evalId));
 	} catch {

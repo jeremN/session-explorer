@@ -92,7 +92,7 @@ node session-explorer/build.ts --serve                                        # 
 
 Options: `[--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--no-grade] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid spec or arguments.
 
-The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money.
+The runner makes no network call. The agent CLIs are the only network users, and the only things that spend money. A command grader is the exception: it is your own command, and it can call a model too (see [Grade the diffs](#grade-the-diffs)).
 
 ### Spec
 
