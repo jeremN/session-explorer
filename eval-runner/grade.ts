@@ -176,7 +176,9 @@ async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader
 	try {
 		const diff = join(copies, `${id}.patch`);
 		copyFileSync(patch, diff);
-		await rebuildRun(exec, { task: target.spec.task, baseSha: target.baseSha, specDir: target.spec.dir, setup: setupFiles(config), patch: diff, dir: clone, gitDir });
+		// Blind: the clone holds the base and the task setup only, never the harness files of the config. Every diff is then
+		// judged against the same instruction files, and the clone does not reveal the config.
+		await rebuildRun(exec, { task: target.spec.task, baseSha: target.baseSha, specDir: target.spec.dir, setup: setupFiles(grader.blind ? { name: 'base' } : config), patch: diff, dir: clone, gitDir });
 		const env = { EVAL_GRADE_ID: id, EVAL_BASE: target.baseSha, EVAL_DIFF: diff, EVAL_SPEC_DIR: target.spec.dir, ...(grader.blind ? {} : { EVAL_CONFIG: run.config, EVAL_RUN_ID: run.id }) };
 		const started = Date.now();
 		const result = await exec('sh', ['-c', grader.command], { cwd: clone, env, timeoutMs: grader.timeoutSec * 1000 });

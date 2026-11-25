@@ -89,14 +89,14 @@ async function git(cwd: string, ...args: string[]) {
 }
 
 // The grader script writes what it saw next to it, then prints its findings. Its first argument picks a behavior.
-const GRADER = `import { readFileSync, writeFileSync } from 'node:fs';
+const GRADER = `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const mode = process.argv[2];
 if (mode === 'bad') { console.log('not json'); process.exit(0); }
 if (mode === 'fail') { console.error('boom'); process.exit(3); }
 if (mode === 'slow') await new Promise((wake) => setTimeout(wake, 5000));
 const id = process.env.EVAL_GRADE_ID;
-writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '.json'), JSON.stringify({ id, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), env: process.env }));
+writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '.json'), JSON.stringify({ id, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), env: process.env }));
 console.log(JSON.stringify({ findings: [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1, extra: 'dropped' }], costUsd: 0.4 }));
 `;
 
@@ -128,7 +128,8 @@ async function fixture(name: string, graders: unknown[], budget: Record<string, 
 		if (run.id in patches) writeFileSync(join(evalDir, 'runs', run.id, 'diff.patch'), patches[run.id]);
 	}
 	const task = { repo, base: 'HEAD', prompt: 'Make it 42.', timeoutSec: 60, acceptance: { command: 'true', timeoutSec: 30 } };
-	const configs = [{ name: 'zebra-config' }, { name: 'yak-config' }];
+	// zebra-config writes a harness file: a blind grader must not see it.
+	const configs = [{ name: 'zebra-config', files: { 'HARNESS.md': { text: 'zebra rules\n' } } }, { name: 'yak-config' }];
 	const ev = {
 		schema: 'eval-runner/v1',
 		id: 'e1',
@@ -190,6 +191,8 @@ test('a command grader runs blind in a new clone of the change, and its findings
 		assert.equal(view.specDir, specDir);
 		assert.equal(view.answer, runId === 'zebra-config-1' ? '42\n' : '43\n');
 		assert.equal(view.diffText, patches[runId]);
+		// The clone holds the base, not the harness files of the config.
+		assert.equal(view.harness, false);
 		// The copy of the patch is named by the grade id.
 		assert.ok(view.diff.endsWith(`${view.id}.patch`));
 		// Blind: no config name and no run id in the cwd, the patch path or the environment. Both are gone after the grade.
