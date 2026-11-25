@@ -384,3 +384,20 @@ test('a user CLAUDE.md becomes CLAUDE.local.md in the setup commit, next to the 
 	await removeWorkspace(dir);
 });
 
+test('remove deletes committed paths before the setup commit, so the removal is not agent work', async () => {
+	mkdirSync(join(repo, '.claude', 'skills', 'team'), { recursive: true });
+	writeFileSync(join(repo, '.claude', 'skills', 'team', 'SKILL.md'), 'team\n');
+	writeFileSync(join(repo, 'AGENTS.md'), 'team rules\n');
+	await git(repo, 'add', '-A');
+	await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'harness');
+	const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
+	const dir = join(root, 'clones', 'remove');
+	const gitDir = gitDirOf('remove');
+	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: head, dir, gitDir, setup: { claudeMd: { text: 'mine\n' }, skills: [], remove: ['AGENTS.md', '.claude'] } });
+	assert.equal(existsSync(join(dir, 'AGENTS.md')), false);
+	assert.equal(existsSync(join(dir, '.claude')), false);
+	assert.equal(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), 'mine\n');
+	assert.equal((await collectDiff(realExec, dir, setupSha, gitDir)).files, 0);
+	await removeWorkspace(dir);
+});
+

@@ -189,3 +189,9 @@ test('userClaudeMd takes a text or a file, and only Claude Code reads it', () =>
 	failure(withConfig({ agent: 'codex', userClaudeMd: { text: 'a' } }), 'configs[0].userClaudeMd');
 });
 
+test('remove takes relative paths inside the clone, for any agent', () => {
+	const withConfig = (config: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...config }] });
+	assert.deepEqual(validateSpec(withConfig({ agent: 'codex', remove: ['AGENTS.md', '.claude'] }), '/specs/demo').configs[0].remove, ['AGENTS.md', '.claude']);
+	for (const path of ['/etc', '../up', 'a/../b', '.git/config', 'a//b', '.']) failure(withConfig({ remove: [path] }), 'configs[0].remove');
+});
+
