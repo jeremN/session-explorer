@@ -21,6 +21,7 @@
     "eval:matrix": "node eval-runner/matrix.ts",
     "eval:watch": "node eval-runner/watch.ts",
     "eval:grade": "node eval-runner/grade.ts",
-    "eval:metrics": "node eval-runner/metrics.ts"
+    "eval:metrics": "node eval-runner/metrics.ts",
+    "eval:edits": "node eval-runner/edits.ts"
   }
 }

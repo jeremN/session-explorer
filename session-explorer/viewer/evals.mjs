@@ -213,8 +213,26 @@ export function renderEvalOptions(evals, selectedId) {
 		.join('');
 }
 
-/** The whole view for one eval: header panel, comparison panel, runs panel. */
-export function renderEval(ev) {
+/** The path of the edits.patch of each config with edits, by config name. The view reads them before it renders. */
+export function editsPaths(ev) {
+	return Object.fromEntries(ev.configs.filter((config) => typeof config.editsPatch === 'string').map((config) => [config.name, config.editsPatch]));
+}
+
+const patchLine = (line) => (line.startsWith('+') && !line.startsWith('+++') ? '<ins>' + esc(line) + '</ins>' : line.startsWith('-') && !line.startsWith('---') ? '<del>' + esc(line) + '</del>' : esc(line));
+
+/** The "Variantes" panel: for each config with edits, the diff of its edited files against the base. */
+export function renderEdits(ev, patches = {}) {
+	const blocks = Object.entries(editsPaths(ev)).map(([name, path]) => {
+		const text = patches[name];
+		const body = typeof text === 'string' ? text.split('\n').map(patchLine).join('\n') : 'diff illisible : ' + esc(path);
+		return '<details class="ev-edits"><summary>' + esc(name) + ' · ' + esc(path) + '</summary><pre class="ev-patch">' + body + '</pre></details>';
+	});
+	return blocks.length ? '<section class="panel"><h3>Variantes</h3>' + blocks.join('') + '</section>' : '';
+}
+
+/** The whole view for one eval: header panel, comparison panel, variants panel, runs panel. `patches`: the text of
+ * each edits.patch, by config name. */
+export function renderEval(ev, patches = {}) {
 	const started = ev.runs.filter((run) => run.status !== 'skipped');
 	const passed = started.filter((run) => run.acceptance?.passed).length;
 	const seconds = started.reduce((total, run) => total + (run.wallSec ?? 0), 0);
@@ -232,6 +250,7 @@ export function renderEval(ev) {
 	return (
 		'<section class="panel"><p class="ev-line">' + line + '</p><dl class="stat-grid">' + stats + '</dl></section>' +
 		'<section class="panel"><h3>Comparaison</h3><div class="ev-scroll">' + renderComparison(ev) + '</div></section>' +
+		renderEdits(ev, patches) +
 		'<section class="panel"><h3>Runs</h3><div class="ev-scroll">' + renderRuns(ev) + '</div></section>'
 	);
 }
