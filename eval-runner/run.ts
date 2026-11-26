@@ -23,6 +23,7 @@ import { behaviorFiles, scoreFiles, scoreRun } from './score.ts';
 import { SpecError, loadSpec } from './spec.ts';
 import type { AgentName, Config, Spec } from './spec.ts';
 import { gradeRuns } from './grade.ts';
+import { prepareMirror } from './mirror.ts';
 import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
 import { changeNote, collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus, treeWarning } from './workspace.ts';
@@ -128,7 +129,7 @@ function outcomeOf(config: Config, stdout: string, prompt: string, start: number
 }
 
 // `signal`: a campaign aborts the run with it. Only the setup and the agent carry it: the cleanup always runs.
-export type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string; opencodeVersion?: string; signal?: AbortSignal };
+export type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string; opencodeVersion?: string; mirror?: string; signal?: AbortSignal };
 // `transient`: the run failed for a reason that a new run can fix (an overloaded API, an agent killed by a signal).
 export type RunOutcome = { record: RunRecord; failed: boolean; transient: boolean };
 
@@ -138,7 +139,7 @@ const TRANSIENT = /overloaded|\b529\b|rate.?limit|ECONNRESET|ETIMEDOUT|EAI_AGAIN
 // A process that never started (a missing executable) is not transient: a new run fails the same way.
 const NOT_STARTED = /\bspawn\b|ENOENT|EACCES/;
 
-export async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion, signal }: RunContext, planned: Planned): Promise<RunOutcome> {
+export async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion, mirror, signal }: RunContext, planned: Planned): Promise<RunOutcome> {
 	const sessionId = randomUUID();
 	const name = containerName(evalId, planned.id);
 	const runDir = join(evalDir, 'runs', planned.id);
@@ -157,7 +158,7 @@ export async function runOne({ exec, spec, options, baseSha, evalId, evalDir, im
 	try {
 		gitDir = mkdtempSync(join(tmpdir(), 'eval-runner-git-'));
 		chmodSync(gitDir, 0o700);
-		const { setupSha, fileMode } = await createWorkspace(exec, { repo: spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
+		const { setupSha, fileMode } = await createWorkspace(exec, { repo: mirror ?? spec.task.repo, baseSha, dir: clone, gitDir, setup: setupFiles(planned.config) });
 		// The setup command (an install) runs after the setup commit: its untracked output (node_modules) stays out of
 		// the diff, as long as .gitignore lists it.
 		if (spec.task.setup) {
@@ -296,6 +297,8 @@ export type Prepared = {
 	editErrors: Record<string, string>;
 	keys: Record<string, string>;
 	cacheDir: string;
+	// The bare mirror that the runs and the blind graders clone from. Not set with `task.mirror: false` or `--dry-run`.
+	mirror?: string;
 	// The runs reused from the cache, and how many each config has.
 	reused: RunRecord[];
 	have: Record<string, number>;
@@ -344,6 +347,17 @@ export async function prepareEval(exec: Exec, spec: Spec, options: Options, { ev
 		}
 	}
 	const cacheDir = join(options.out, 'cache');
+	// The runs clone from the mirror, not from the working checkout, which changes while the eval runs.
+	let mirror: string | undefined;
+	if (spec.task.mirror !== false && !options.dryRun) {
+		try {
+			mirror = await prepareMirror(exec, { repo: spec.task.repo, baseSha, cacheDir });
+		} catch (error) {
+			console.error((error as Error).message);
+			return { code: 2 };
+		}
+		console.log(`Mirror of ${spec.task.repo}: ${mirror}`);
+	}
 	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir, edited: edited[config.name] })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
 	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, !cache || options.noCache || versionOf(config) === 'unknown' || editErrors[config.name] ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
@@ -358,7 +372,7 @@ export async function prepareEval(exec: Exec, spec: Spec, options: Options, { ev
 		record.steps = behavior.steps;
 	}
 	const have = Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length]));
-	return { spec, options, baseSha, evalId, evalDir, image, versions, cliVersion, edited, editErrors, keys, cacheDir, reused, have, editsPatches: {} };
+	return { spec, options, baseSha, evalId, evalDir, image, versions, cliVersion, edited, editErrors, keys, cacheDir, mirror, reused, have, editsPatches: {} };
 }
 
 // Creates the eval directory and writes what each config measured: the diff of its edited files against the base.
@@ -421,7 +435,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const evalDir = join(options.out, evalId);
 	const prepared = await prepareEval(exec, spec, options, { evalId, evalDir });
 	if ('code' in prepared) return prepared;
-	const { baseSha, image, versions, edited, editErrors, keys, cacheDir, reused, have } = prepared;
+	const { baseSha, image, versions, edited, editErrors, keys, cacheDir, mirror, reused, have } = prepared;
 	const planned = planRuns(spec.configs, spec.runs, have);
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 
@@ -436,9 +450,11 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
 	if (options.dryRun) return { code: 0 };
 
-	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	await startEval(exec, prepared);
-	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion: versions.opencode };
+	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion: versions.opencode, mirror };
+	// The guard window of the last run: the status of the source right before it and right after it. An edit of the user
+	// between two runs is in no window, so it never counts.
+	let guard: { before: string; after: string } | undefined;
 	const runs: RunRecord[] = [...reused];
 	let spent = 0;
 	let anyFailed = false;
@@ -455,10 +471,12 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 			console.log(`[${position + 1}/${planned.length}] ${run.id} skipped: the eval budget would pass`);
 			continue;
 		}
+		const statusBefore = await sourceStatus(exec, spec.task.repo);
 		const { record, failed } = await runOne(context, run);
 		anyFailed ||= failed;
 		// An agent that writes outside its clone could write anywhere. The eval stops at the first sign.
 		const statusNow = await sourceStatus(exec, spec.task.repo);
+		guard = { before: statusBefore, after: statusNow };
 		if (statusNow !== statusBefore) {
 			record.status = 'error';
 			record.note = `the agent changed the working tree of ${spec.task.repo} (${changeNote(statusBefore, statusNow)})${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
@@ -472,7 +490,11 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		console.log(`[${position + 1}/${planned.length}] ${run.id} ${record.status}, check ${record.acceptance?.passed ? 'passed' : 'failed'}, ${record.metrics?.cost ?? '?'} $, ${record.wallSec ?? '?'} s`);
 	}
 
-	const statusAfterRuns = await sourceStatus(exec, spec.task.repo);
+	// With no run, the grading window starts here.
+	if (!guard) {
+		const now = await sourceStatus(exec, spec.task.repo);
+		guard = { before: now, after: now };
+	}
 	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
 	const save = () => saveEval(prepared, runs, spent);
 	save();
@@ -480,7 +502,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	// The graders come after the run cache, so a cached run never carries a grade into a later eval. eval.json exists
 	// before them: a grade pass that stops halfway loses only its grades, and grade.ts can run it again.
 	if (spec.graders && !options.noGrade) {
-		await gradeRuns({ evalId, evalDir, baseSha, spec, runs }, { exec });
+		await gradeRuns({ evalId, evalDir, baseSha, spec, runs, mirror }, { exec });
 		save();
 	}
 	try {
@@ -488,7 +510,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	} catch {
 		// Kept clones, or already gone.
 	}
-	const warning = treeWarning(spec.task.repo, { before: statusBefore, afterRuns: statusAfterRuns, final: await sourceStatus(exec, spec.task.repo) });
+	const warning = treeWarning(spec.task.repo, { before: guard.before, afterRuns: guard.after, final: await sourceStatus(exec, spec.task.repo) });
 	if (warning) console.error(warning);
 	console.log(`Spent ${dollars(spent)} $. Results in ${evalDir}`);
 	return { code: anyFailed ? 1 : 0, evalDir };

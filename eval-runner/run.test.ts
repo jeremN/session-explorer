@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { realExec } from './exec.ts';
+import type { Exec } from './exec.ts';
+import { runEval } from './run.ts';
 
 const RUN = join(import.meta.dirname, 'run.ts');
 const FAKE = join(import.meta.dirname, 'fixtures', 'fake-claude.mjs');
@@ -535,4 +537,56 @@ test('a config with edits runs on the edited files and keeps edits.patch; a fail
 	const latest = JSON.parse(readFileSync(join(out, readdirSync(out).filter((name) => name !== 'index.json' && name !== 'cache').sort().at(-1)!, 'eval.json'), 'utf8'));
 	assert.deepEqual(latest.runs.map((run: { id: string; cached?: unknown }) => [run.id, Boolean(run.cached)]), [['edited-1', true], ['broken-1', false]]);
 	assert.ok(existsSync(join(out, latest.id, latest.configs[1].editsPatch)));
+});
+
+test('the runs clone from a bare mirror in the cache, and the eval prints its path once', async () => {
+	const out = join(root, 'out-mirror');
+	const first = await cli([writeSpec('mirror', { runs: 1 }), '--claude', FAKE, '--out', out, '--only', 'baseline']);
+	assert.equal(first.code, 0, first.stderr);
+	const mirrors = readdirSync(join(out, 'cache', 'mirrors'));
+	assert.equal(mirrors.length, 1);
+	const mirror = join(out, 'cache', 'mirrors', mirrors[0]);
+	assert.equal(existsSync(join(mirror, 'objects')) && !existsSync(join(mirror, '.git')), true);
+	assert.equal(first.stdout.split('\n').filter((line) => line.includes(mirror)).length, 1, first.stdout);
+	// The next eval fetches into the same mirror.
+	const second = await cli([writeSpec('mirror', { runs: 1 }), '--claude', FAKE, '--out', out, '--only', 'baseline', '--no-cache']);
+	assert.equal(second.code, 0, second.stderr);
+	assert.deepEqual(readdirSync(join(out, 'cache', 'mirrors')), mirrors);
+	assert.equal(second.stdout.split('\n').filter((line) => line.includes(mirror)).length, 1, second.stdout);
+});
+
+test('task.mirror false clones from the source repo and makes no mirror', async () => {
+	const out = join(root, 'out-no-mirror');
+	const task = { repo, prompt: 'Make the change.', timeoutSec: 60, mirror: false, acceptance: { command: 'grep -q "agent was here" agent-output.txt' } };
+	const result = await cli([writeSpec('no-mirror', { runs: 1, task }), '--claude', FAKE, '--out', out, '--only', 'baseline']);
+	assert.equal(result.code, 0, result.stderr);
+	assert.equal(existsSync(join(out, 'cache', 'mirrors')), false);
+});
+
+test('a change of the source repo between two runs gives no warning, and the eval goes on', async () => {
+	const out = join(root, 'out-between');
+	const env = { projects: process.env.EVAL_RUNNER_PROJECTS_DIR };
+	process.env.EVAL_RUNNER_PROJECTS_DIR = projects;
+	let statuses = 0;
+	// The user edits the checkout after the check of the first run, and before the baseline of the second.
+	const hooked: Exec = async (command, args, options) => {
+		const result = await realExec(command, args, options);
+		if (command === 'git' && args[0] === 'status' && options?.cwd === repo && ++statuses === 2) writeFileSync(join(repo, 'between.txt'), 'x\n');
+		return result;
+	};
+	const lines: string[] = [];
+	const { log, error } = console;
+	console.log = (...parts: unknown[]) => void lines.push(parts.join(' '));
+	console.error = (...parts: unknown[]) => void lines.push(parts.join(' '));
+	try {
+		const result = await runEval([writeSpec('between', { runs: 2 }), '--claude', FAKE, '--out', out, '--only', 'baseline'], hooked);
+		assert.equal(result.code, 0, lines.join('\n'));
+		assert.ok(statuses >= 4);
+		assert.ok(!lines.join('\n').includes('working tree'), lines.join('\n'));
+	} finally {
+		Object.assign(console, { log, error });
+		rmSync(join(repo, 'between.txt'), { force: true });
+		if (env.projects === undefined) delete process.env.EVAL_RUNNER_PROJECTS_DIR;
+		else process.env.EVAL_RUNNER_PROJECTS_DIR = env.projects;
+	}
 });

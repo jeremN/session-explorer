@@ -111,6 +111,7 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 | `task.timeoutSec` | Time limit of the agent. Default 900. |
 | `task.acceptance.command` | Required. It runs in the clone after the agent stops, with `EVAL_SPEC_DIR` set. Exit code 0 means passed. Keep the check script next to the spec, outside the clone. |
 | `task.acceptance.timeoutSec` | Default 300. |
+| `task.mirror` | Optional. Set `false` to clone each run from `task.repo` itself, not from the mirror. See [Mirror](#mirror). |
 | `task.hiddenTests` | Optional `{ commit, paths }`. The runner copies these files from `commit` in `task.repo` into the clone after the agent stops and after the diff, then runs the acceptance command. Use it for a task mined from a past session: `commit` is the solution, `paths` are its tests. |
 | `budget.perRunUsd`, `budget.perEvalUsd` | Both required. |
 | `budget.gradersUsd` | Optional. The budget of the command graders, apart from the budget of the agents. See [Grade the diffs](#grade-the-diffs). |
@@ -551,9 +552,26 @@ Details:
 - Runs go in round-robin order over the configurations, one at a time.
 - A run over `task.timeoutSec` gets SIGTERM, then SIGKILL after 10 s. Its status is `timeout`. It is still scored and checked.
 
+### Mirror
+
+`task.repo` is your working checkout. You edit it during an eval, and git maintenance rewrites its object store. A run that clones from it can fail, or can read a half-written state. So the runner clones each run from a bare mirror of the repository, not from the checkout.
+
+- The mirror lives in `eval-runner/out/cache/mirrors/<hash>`. `<hash>` is a hash of the absolute path of `task.repo`. The runner prints the path once per eval.
+- The first eval runs `git clone --mirror` of `task.repo`. Each later eval runs `git fetch --prune` in the mirror, so the mirror follows every branch and tag of the checkout.
+- The base commit must be in the mirror. If it is not under a ref (a commit on a detached HEAD), the runner fetches it by its id from `task.repo`.
+- A lock file, `<hash>.lock`, guards the creation and the fetch. Evals that run in parallel on one repository wait for each other. The runner removes a lock whose process is gone. If a lock stays, delete the file.
+- The clone of a run shares no object file with the mirror, so a later fetch or prune of the mirror cannot break a run.
+- The clones of the command graders come from the mirror too. `pnpm eval:grade` alone creates the mirror at the first clone.
+- `node eval-runner/recheck.ts` and the hidden tests (`task.hiddenTests`) still read `task.repo`.
+- The runner does not set up submodules in a clone, with or without the mirror.
+- The mirror is a cache. Delete `eval-runner/out/cache/mirrors` to free the disk. The next eval creates it again.
+- `task.mirror: false` clones from `task.repo` itself, as before.
+
 ### Isolation
 
-Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. It prints one warning per repository if `git status` of the source repository changed. The warning names the phase (the runs or the grading) and lists the status lines that appeared and disappeared, ten at most. The runner removes each clone, unless you pass `--keep`.
+Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git fetch`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. The runner removes each clone, unless you pass `--keep`.
+
+The working tree guard still watches `task.repo`, to catch an agent that writes outside its clone into your checkout. The runner takes `git status --porcelain` right before each run and compares it right after that run. A change in that window stops the eval and marks the run as an error. Your own edits between two runs never count. The runner prints one warning per repository if the status changed during the last run or during the grading. The warning names the phase (the runs or the grading) and lists the status lines that appeared and disappeared, ten at most. An edit of yours during a run or during the grading still triggers it: the guard cannot tell your edit from the agent.
 
 Guards against an agent that tries to leave its clone:
 

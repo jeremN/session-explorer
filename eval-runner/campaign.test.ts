@@ -428,3 +428,44 @@ test('a grader that writes in the source repo gives one warning for two specs of
 		rmSync(leak('leak-grading.txt'), { force: true });
 	}
 });
+
+test('the runs and the blind graders clone from the mirror, never from the source repo', async () => {
+	const out = join(root, 'out-mirror');
+	const grader = { name: 'mirrored', kind: 'command', command: `node -e "console.log(JSON.stringify({ findings: [] }))"`, timeoutSec: 60, blind: true };
+	const file = campaignFile('mirror', { specs: [specFile('malpha', ['base', 'tested'], { graders: [grader] })], runs: 1 });
+	const probe = spy();
+	const { result, out: text } = await quiet(() => runCampaign(argv(file, out), probe.exec));
+	assert.equal(result, 0, text);
+	const mirrors = readdirSync(join(out, 'cache', 'mirrors'));
+	assert.equal(mirrors.length, 1);
+	const mirror = join(out, 'cache', 'mirrors', mirrors[0]);
+	assert.ok(text.includes(mirror), text);
+	const clones = probe.calls.filter((call) => call.command === 'git' && call.args[0] === 'fetch' && call.args.includes('--no-tags') && call.cwd !== mirror);
+	// Two runs and one blind grader clone: both runs give one diff, so the second grade comes from the grade cache.
+	assert.equal(clones.length, 3, JSON.stringify(clones));
+	for (const call of clones) {
+		assert.ok(call.args.includes(mirror), JSON.stringify(call));
+		assert.ok(!call.args.includes(repo), JSON.stringify(call));
+	}
+});
+
+test('a change of the source repo between two runs gives no warning and no error', async () => {
+	const out = join(root, 'out-between');
+	const probe = spy();
+	let statuses = 0;
+	// The user edits the checkout after the check of the first run, and before the baseline of the second.
+	const hooked: Exec = async (command, args, options) => {
+		const result = await probe.exec(command, args, options);
+		if (command === 'git' && args[0] === 'status' && options?.cwd === repo && ++statuses === 2) writeFileSync(leak('between.txt'), 'x\n');
+		return result;
+	};
+	try {
+		const { result, out: text } = await quiet(() => runCampaign(argv(campaignFile('between', { specs: [specFile('alpha')], runs: 2 }), out), hooked));
+		assert.equal(result, 0, text);
+		assert.ok(statuses >= 4);
+		assert.ok(!text.includes('Warning: the working tree'), text);
+		assert.ok(!text.includes('changed the working tree'), text);
+	} finally {
+		rmSync(leak('between.txt'), { force: true });
+	}
+});

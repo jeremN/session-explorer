@@ -215,7 +215,7 @@ function writeCampaignIndex(out: string) {
 export type Hooks = { signal?: AbortSignal; backoffMs?: number };
 
 // One spec of the campaign while it runs.
-type SpecState = { prepared: Prepared; runs: RunRecord[]; spent: number; costs: number[]; statusBefore: string };
+type SpecState = { prepared: Prepared; runs: RunRecord[]; spent: number; costs: number[] };
 
 export async function runCampaign(argv: string[], exec: Exec = realExec, { signal: outer, backoffMs = 5000 }: Hooks = {}): Promise<number> {
 	let cli: CliOptions | 'help';
@@ -255,6 +255,8 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 	const options: Options = { specPath: '', dryRun: cli.dryRun, keep: cli.keep, noCache: true, noGrade: cli.noGrade, bin: cli.bin, docker: cli.docker, out: cli.out };
 
 	const states = new Map<string, SpecState>();
+	// The guard window of the last run of each repo: its status right before the run and right after it.
+	const windows = new Map<string, { before: string; after: string }>();
 	for (const [position, { spec }] of campaign.specs.entries()) {
 		const evalId = `${campaignId}-${spec.name}`;
 		const prepared = await prepareEval(exec, spec, options, { evalId, evalDir: join(campaignDir, spec.name), baseSha: previous?.specs[position].baseSha, cache: false });
@@ -268,7 +270,7 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 				runs = [];
 			}
 		}
-		states.set(spec.name, { prepared, runs, spent: 0, costs: [], statusBefore: '' });
+		states.set(spec.name, { prepared, runs, spent: 0, costs: [] });
 	}
 	const specsOf = campaign.specs.map(({ spec }) => spec);
 	const have = new Set([...states.entries()].flatMap(([name, state]) => state.runs.map((run) => `${name}/${run.id}`)));
@@ -292,7 +294,6 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 	let anyFailed = false;
 
 	for (const state of states.values()) {
-		state.statusBefore = await sourceStatus(exec, state.prepared.spec.task.repo);
 		await startEval(exec, state.prepared);
 		state.spent = previous ? (readEvalSpent(state.prepared.evalDir) ?? 0) : 0;
 		state.costs = state.runs.map((run) => run.cliCostUsd).filter((value): value is number => typeof value === 'number');
@@ -369,13 +370,18 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 				console.log(`${job.spec} ${job.id} error: ${prepared.editErrors[job.config]}`);
 				return { costUsd: 0 };
 			}
-			const context = { exec, spec: prepared.spec, options, baseSha: prepared.baseSha, evalId: prepared.evalId, evalDir: prepared.evalDir, image: prepared.image, opencodeVersion: prepared.versions.opencode, signal };
+			const context = { exec, spec: prepared.spec, options, baseSha: prepared.baseSha, evalId: prepared.evalId, evalDir: prepared.evalDir, image: prepared.image, opencodeVersion: prepared.versions.opencode, mirror: prepared.mirror, signal };
+			// The baseline is the status right before this run, so an edit of the user between two runs never counts.
+			const statusBefore = await sourceStatus(exec, prepared.spec.task.repo);
 			const { record, failed, transient } = await runOne(context, { id: job.id, config, index: job.index });
 			// An agent that writes outside its clone could write anywhere. The campaign stops at the first sign.
-			const statusNow = record.status === 'interrupted' ? state.statusBefore : await sourceStatus(exec, prepared.spec.task.repo);
-			if (statusNow !== state.statusBefore) {
+			const statusNow = record.status === 'interrupted' ? statusBefore : await sourceStatus(exec, prepared.spec.task.repo);
+			// A window that changed stays: a clean window of a run that ends later must not hide it from the warning.
+			const kept = windows.get(prepared.spec.task.repo);
+			if (!kept || kept.before === kept.after) windows.set(prepared.spec.task.repo, { before: statusBefore, after: statusNow });
+			if (statusNow !== statusBefore) {
 				record.status = 'error';
-				const change = changeNote(state.statusBefore, statusNow);
+				const change = changeNote(statusBefore, statusNow);
 				record.note = `the agent changed the working tree of ${prepared.spec.task.repo} (${change})${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
 				console.error(`${job.spec} ${job.id}: the agent changed the working tree of ${prepared.spec.task.repo} (${change}). The campaign stops. Check \`git status\` there.`);
 				fatal = true;
@@ -412,9 +418,8 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 
 	// One status per repo, taken after the runs: a change after it comes from the graders.
 	const repos = [...new Set([...states.values()].map((state) => state.prepared.spec.task.repo))];
-	const firstOf = (repo: string) => [...states.values()].find((state) => state.prepared.spec.task.repo === repo)!;
 	const afterRuns = new Map<string, string>();
-	for (const repo of repos) afterRuns.set(repo, await sourceStatus(exec, repo));
+	for (const repo of repos) afterRuns.set(repo, windows.get(repo)?.after ?? (await sourceStatus(exec, repo)));
 	// The graders come after the runs and share one budget. An interrupted campaign skips them: eval-runner/grade.ts runs them later.
 	if (!interrupted && !cli.noGrade) {
 		const guarded: Exec = (command, args, execOptions) => exec(command, args, { ...execOptions, signal: controller.signal });
@@ -423,7 +428,7 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 			if (!prepared.spec.graders) continue;
 			const left = campaign.budget.gradersUsd === undefined ? prepared.spec.budget.gradersUsd : Math.max(0, campaign.budget.gradersUsd - gradersSpent);
 			const spec = { ...prepared.spec, budget: { ...prepared.spec.budget, ...(left === undefined ? {} : { gradersUsd: left }) } };
-			const { spentUsd } = await gradeRuns({ evalId: prepared.evalId, evalDir: prepared.evalDir, baseSha: prepared.baseSha, spec, runs: state.runs }, { exec: guarded });
+			const { spentUsd } = await gradeRuns({ evalId: prepared.evalId, evalDir: prepared.evalDir, baseSha: prepared.baseSha, spec, runs: state.runs, mirror: prepared.mirror }, { exec: guarded });
 			gradersSpent += spentUsd;
 			saveEval(prepared, state.runs, state.spent);
 		}
@@ -445,7 +450,7 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 	}
 	// One warning per repo, not per spec.
 	for (const repo of repos) {
-		const warning = treeWarning(repo, { before: firstOf(repo).statusBefore, afterRuns: afterRuns.get(repo)!, final: await sourceStatus(exec, repo) });
+		const warning = treeWarning(repo, { before: windows.get(repo)?.before ?? afterRuns.get(repo)!, afterRuns: afterRuns.get(repo)!, final: await sourceStatus(exec, repo) });
 		if (warning) console.error(warning);
 	}
 	console.log(`Spent ${dollars(totalSpent())} $${gradersSpent > 0 ? `, graders ${dollars(gradersSpent)} $` : ''}. Results in ${campaignDir}`);
