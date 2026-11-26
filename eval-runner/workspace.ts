@@ -40,6 +40,32 @@ export async function sourceStatus(exec: Exec, repo: string): Promise<string> {
 	return (await git(exec, repo, ['status', '--porcelain'])).trimEnd();
 }
 
+// The lines of two `git status --porcelain` outputs that differ. A list holds ten lines at most, then `... N more`.
+const MAX_LINES = 10;
+const capped = (lines: string[]) => (lines.length > MAX_LINES ? [...lines.slice(0, MAX_LINES), `... ${lines.length - MAX_LINES} more`] : lines);
+
+export function statusChange(before: string, after: string): { appeared: string[]; disappeared: string[] } {
+	const lines = (status: string) => (status ? status.split('\n') : []);
+	const [old, now] = [lines(before), lines(after)];
+	return { appeared: capped(now.filter((line) => !old.includes(line))), disappeared: capped(old.filter((line) => !now.includes(line))) };
+}
+
+// The change in one line, for the note of a run.
+export function changeNote(before: string, after: string): string {
+	const { appeared, disappeared } = statusChange(before, after);
+	return [appeared.length ? `appeared: ${appeared.join(', ')}` : '', disappeared.length ? `disappeared: ${disappeared.join(', ')}` : ''].filter(Boolean).join('; ');
+}
+
+// The warning of one repo, or undefined when its status never changed. The status is taken before the runs, after the runs
+// and after the grading, so the warning says which phase changed it.
+export function treeWarning(repo: string, status: { before: string; afterRuns: string; final: string }): string | undefined {
+	const phase = status.afterRuns !== status.before ? 'runs' : status.final !== status.afterRuns ? 'grading' : undefined;
+	if (!phase) return undefined;
+	const { appeared, disappeared } = phase === 'runs' ? statusChange(status.before, status.afterRuns) : statusChange(status.afterRuns, status.final);
+	const list = (title: string, lines: string[]) => (lines.length ? [`${title}:`, ...lines.map((line) => `  ${line}`)] : []);
+	return [`Warning: the working tree of ${repo} changed during the ${phase}.`, ...list('appeared', appeared), ...list('disappeared', disappeared)].join('\n');
+}
+
 // The base commit is not trusted: a parent directory in it can be a symlink to a directory outside the clone.
 function refuseSymlinks(dir: string, relative: string) {
 	let path = dir;

@@ -387,3 +387,44 @@ test('a resume refuses a directory that is no campaign', async () => {
 	assert.equal(result, 2);
 	assert.match(out, /campaign\.json/);
 });
+
+const leak = (name: string) => join(repo, name);
+
+test('a change of the source repo prints one warning per repo, names the file, and says the runs changed it', async () => {
+	const out = join(root, 'out-warn-runs');
+	// The first agent writes in the source repo. The per-run check stops the campaign.
+	const probe = spy((number, options) => {
+		if (number === 1) writeFileSync(leak('leak-runs.txt'), 'x\n');
+		return options;
+	});
+	try {
+		const { result, out: text } = await quiet(() => runCampaign(argv(campaignFile('warn-runs'), out), probe.exec));
+		assert.equal(result, 1);
+		assert.match(text, /changed the working tree of .*\(appeared: \?\? leak-runs\.txt\)/);
+		const warnings = text.split('\n').filter((line) => line.startsWith('Warning: the working tree'));
+		assert.equal(warnings.length, 1, text);
+		assert.match(warnings[0], /changed during the runs\./);
+		assert.match(text, /appeared:\n {2}\?\? leak-runs\.txt/);
+		const note = readJson(join(campaignDirOf(out), 'alpha', 'eval.json')).runs.find((run: { status: string }) => run.status === 'error').note;
+		assert.match(note, /leak-runs\.txt/);
+		assert.ok(note.length <= 300);
+	} finally {
+		rmSync(leak('leak-runs.txt'), { force: true });
+	}
+});
+
+test('a grader that writes in the source repo gives one warning for two specs of the repo, during the grading', async () => {
+	const out = join(root, 'out-warn-grading');
+	const grader = { name: 'leaky', kind: 'command', command: `node -e "require('node:fs').writeFileSync(process.argv[1], 'x'); console.log(JSON.stringify({ findings: [] }))" "${leak('leak-grading.txt')}"`, timeoutSec: 60, blind: true };
+	const file = campaignFile('warn-grading', { specs: [specFile('galpha', ['base', 'tested'], { graders: [grader] }), specFile('gbeta', ['base', 'tested'], { graders: [grader] })], runs: 1 });
+	try {
+		const { result, out: text } = await quiet(() => runCampaign(argv(file, out), spy().exec));
+		assert.equal(result, 0, text);
+		const warnings = text.split('\n').filter((line) => line.startsWith('Warning: the working tree'));
+		assert.equal(warnings.length, 1, text);
+		assert.match(warnings[0], /changed during the grading\./);
+		assert.match(text, /appeared:\n {2}\?\? leak-grading\.txt/);
+	} finally {
+		rmSync(leak('leak-grading.txt'), { force: true });
+	}
+});
