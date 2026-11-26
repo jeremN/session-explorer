@@ -325,6 +325,11 @@ test('an agent that writes in the source repository stops the eval, and its run 
 	rmSync(join(repo, 'escaped.txt'), { force: true });
 	assert.equal(result.code, 1);
 	assert.match(result.stderr, /changed the working tree/);
+	assert.match(result.stderr, /Warning: the working tree of .* changed during the runs\./);
+	assert.match(result.stderr, /appeared:\n {2}\?\? escaped\.txt/);
+	const note = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8')).runs[0].note;
+	assert.match(note, /\(appeared: \?\? escaped\.txt\)/);
+	assert.ok(note.length <= 300);
 	const saved = JSON.parse(readFileSync(join(evalDir(out), 'eval.json'), 'utf8'));
 	assert.deepEqual(saved.runs.map((run: { id: string; status: string }) => [run.id, run.status]), [['opencode-1', 'error']]);
 });

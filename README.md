@@ -553,7 +553,7 @@ Details:
 
 ### Isolation
 
-Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. It prints a warning if `git status` of the source repository changed during the eval. The runner removes each clone, unless you pass `--keep`.
+Each run works in a throwaway local clone under `os.tmpdir()`. The clone has no remote, so a push has nowhere to go. The runner reads the source repository with `git clone`, `git rev-parse` and `git status` only. It never pushes, merges or rebases. It prints one warning per repository if `git status` of the source repository changed. The warning names the phase (the runs or the grading) and lists the status lines that appeared and disappeared, ten at most. The runner removes each clone, unless you pass `--keep`.
 
 Guards against an agent that tries to leave its clone:
 

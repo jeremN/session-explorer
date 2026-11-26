@@ -8,7 +8,7 @@ import { setupFiles } from './command.ts';
 import { previewEdits } from './edits.ts';
 import { realExec } from './exec.ts';
 import type { Edit } from './spec.ts';
-import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
+import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus, statusChange, treeWarning } from './workspace.ts';
 
 let root: string;
 let repo: string;
@@ -484,3 +484,24 @@ test('an edit of a file that is a symlink in the base commit is refused, and the
 	await assert.rejects(previewEdits(realExec, { repo: evil, baseSha: sha, config: { name: 'v', edits: [{ file: 'AGENTS.md', append: 'x' }] } }), /^EditError: edits\[0\] AGENTS\.md: the file is a symlink$/);
 });
 
+
+test('statusChange lists the lines that appeared and the lines that disappeared, ten at most', () => {
+	assert.deepEqual(statusChange(' M a.txt\n?? b.txt', '?? b.txt\n?? c.txt'), { appeared: ['?? c.txt'], disappeared: [' M a.txt'] });
+	assert.deepEqual(statusChange('', ''), { appeared: [], disappeared: [] });
+	const many = Array.from({ length: 13 }, (_, index) => `?? f${index}.txt`).join('\n');
+	const { appeared } = statusChange('', many);
+	assert.equal(appeared.length, 11);
+	assert.equal(appeared[9], '?? f9.txt');
+	assert.equal(appeared[10], '... 3 more');
+});
+
+test('treeWarning names the phase and the lines, and stays silent when nothing changed', () => {
+	assert.equal(treeWarning('/r', { before: '?? a', afterRuns: '?? a', final: '?? a' }), undefined);
+	const runs = treeWarning('/r', { before: '', afterRuns: '?? x.txt', final: '?? x.txt' })!;
+	assert.match(runs, /^Warning: the working tree of \/r changed during the runs\./);
+	assert.match(runs, /appeared:\n {2}\?\? x\.txt/);
+	const grading = treeWarning('/r', { before: ' M a', afterRuns: ' M a', final: '' })!;
+	assert.match(grading, /changed during the grading\./);
+	assert.match(grading, /disappeared:\n {2} M a/);
+	assert.doesNotMatch(grading, /\nappeared:/);
+});

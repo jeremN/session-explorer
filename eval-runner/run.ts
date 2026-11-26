@@ -25,7 +25,7 @@ import type { AgentName, Config, Spec } from './spec.ts';
 import { gradeRuns } from './grade.ts';
 import { aggregate } from './stats.ts';
 import type { RunRecord, Status } from './stats.ts';
-import { collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
+import { changeNote, collectDiff, createWorkspace, removeWorkspace, resolveBase, sourceStatus, treeWarning } from './workspace.ts';
 
 const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N] [--only <config>[,<config>]] [--keep] [--no-cache] [--no-grade] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 
@@ -458,9 +458,10 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		const { record, failed } = await runOne(context, run);
 		anyFailed ||= failed;
 		// An agent that writes outside its clone could write anywhere. The eval stops at the first sign.
-		if ((await sourceStatus(exec, spec.task.repo)) !== statusBefore) {
+		const statusNow = await sourceStatus(exec, spec.task.repo);
+		if (statusNow !== statusBefore) {
 			record.status = 'error';
-			record.note = `the agent changed the working tree of ${spec.task.repo}${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
+			record.note = `the agent changed the working tree of ${spec.task.repo} (${changeNote(statusBefore, statusNow)})${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
 			runs.push(record);
 			anyFailed = true;
 			console.error(`${run.id}: the agent changed the working tree of ${spec.task.repo}. The eval stops. Check \`git status\` there.`);
@@ -471,6 +472,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		console.log(`[${position + 1}/${planned.length}] ${run.id} ${record.status}, check ${record.acceptance?.passed ? 'passed' : 'failed'}, ${record.metrics?.cost ?? '?'} $, ${record.wallSec ?? '?'} s`);
 	}
 
+	const statusAfterRuns = await sourceStatus(exec, spec.task.repo);
 	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
 	const save = () => saveEval(prepared, runs, spent);
 	save();
@@ -486,7 +488,8 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	} catch {
 		// Kept clones, or already gone.
 	}
-	if ((await sourceStatus(exec, spec.task.repo)) !== statusBefore) console.error(`Warning: the working tree of ${spec.task.repo} changed during the eval.`);
+	const warning = treeWarning(spec.task.repo, { before: statusBefore, afterRuns: statusAfterRuns, final: await sourceStatus(exec, spec.task.repo) });
+	if (warning) console.error(warning);
 	console.log(`Spent ${dollars(spent)} $. Results in ${evalDir}`);
 	return { code: anyFailed ? 1 : 0, evalDir };
 }

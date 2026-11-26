@@ -18,7 +18,7 @@ import { SpecError, loadSpec } from './spec.ts';
 import type { Spec } from './spec.ts';
 import { median } from './stats.ts';
 import type { RunRecord } from './stats.ts';
-import { sourceStatus } from './workspace.ts';
+import { changeNote, sourceStatus, treeWarning } from './workspace.ts';
 
 const USAGE = `Usage: node eval-runner/campaign.ts <campaign.json> [--dry-run] [--no-grade] [--resume <campaignDir>] [--keep] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]
 
@@ -372,10 +372,12 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 			const context = { exec, spec: prepared.spec, options, baseSha: prepared.baseSha, evalId: prepared.evalId, evalDir: prepared.evalDir, image: prepared.image, opencodeVersion: prepared.versions.opencode, signal };
 			const { record, failed, transient } = await runOne(context, { id: job.id, config, index: job.index });
 			// An agent that writes outside its clone could write anywhere. The campaign stops at the first sign.
-			if (record.status !== 'interrupted' && (await sourceStatus(exec, prepared.spec.task.repo)) !== state.statusBefore) {
+			const statusNow = record.status === 'interrupted' ? state.statusBefore : await sourceStatus(exec, prepared.spec.task.repo);
+			if (statusNow !== state.statusBefore) {
 				record.status = 'error';
-				record.note = `the agent changed the working tree of ${prepared.spec.task.repo}${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
-				console.error(`${job.spec} ${job.id}: the agent changed the working tree of ${prepared.spec.task.repo}. The campaign stops. Check \`git status\` there.`);
+				const change = changeNote(state.statusBefore, statusNow);
+				record.note = `the agent changed the working tree of ${prepared.spec.task.repo} (${change})${record.note ? `; ${record.note}` : ''}`.slice(0, 300);
+				console.error(`${job.spec} ${job.id}: the agent changed the working tree of ${prepared.spec.task.repo} (${change}). The campaign stops. Check \`git status\` there.`);
 				fatal = true;
 				controller.abort();
 			}
@@ -408,6 +410,11 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 	for (const name of states.keys()) save(name);
 	const interrupted = controller.signal.aborted;
 
+	// One status per repo, taken after the runs: a change after it comes from the graders.
+	const repos = [...new Set([...states.values()].map((state) => state.prepared.spec.task.repo))];
+	const firstOf = (repo: string) => [...states.values()].find((state) => state.prepared.spec.task.repo === repo)!;
+	const afterRuns = new Map<string, string>();
+	for (const repo of repos) afterRuns.set(repo, await sourceStatus(exec, repo));
 	// The graders come after the runs and share one budget. An interrupted campaign skips them: eval-runner/grade.ts runs them later.
 	if (!interrupted && !cli.noGrade) {
 		const guarded: Exec = (command, args, execOptions) => exec(command, args, { ...execOptions, signal: controller.signal });
@@ -435,7 +442,11 @@ export async function runCampaign(argv: string[], exec: Exec = realExec, { signa
 		} catch {
 			// Kept clones, or already gone.
 		}
-		if ((await sourceStatus(exec, state.prepared.spec.task.repo)) !== state.statusBefore) console.error(`Warning: the working tree of ${state.prepared.spec.task.repo} changed during the campaign.`);
+	}
+	// One warning per repo, not per spec.
+	for (const repo of repos) {
+		const warning = treeWarning(repo, { before: firstOf(repo).statusBefore, afterRuns: afterRuns.get(repo)!, final: await sourceStatus(exec, repo) });
+		if (warning) console.error(warning);
 	}
 	console.log(`Spent ${dollars(totalSpent())} $${gradersSpent > 0 ? `, graders ${dollars(gradersSpent)} $` : ''}. Results in ${campaignDir}`);
 	if (interrupted && !fatal) console.log(`Interrupted. Run again with: --resume ${campaignDir}`);
