@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { realExec } from './exec.ts';
+import { killLiveGroups, realExec } from './exec.ts';
 
 const alive = (pid: number) => {
 	try {
@@ -97,4 +97,41 @@ test('after a normal exit, a background descendant in the same group is dead whe
 		if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test('an abort signal kills the process group and sets aborted', async () => {
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), 300);
+	const started = Date.now();
+	const result = await realExec('sh', ['-c', 'sleep 30 & echo $!; wait'], { signal: controller.signal, killGraceMs: 300 });
+	const pid = Number(result.stdout.trim());
+	try {
+		assert.equal(result.aborted, true);
+		assert.equal(result.timedOut, false);
+		assert.ok(Date.now() - started < 10_000);
+		assert.ok(pid > 0);
+		assert.equal(alive(pid), false);
+	} finally {
+		if (alive(pid)) process.kill(pid, 'SIGKILL');
+	}
+});
+
+test('a signal that is already aborted starts no process', async () => {
+	const controller = new AbortController();
+	controller.abort();
+	const mark = join(tmpdir(), `exec-mark-${process.pid}`);
+	const result = await realExec(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.env.MARK, "ran")'], { signal: controller.signal, env: { MARK: mark } });
+	assert.equal(result.aborted, true);
+	assert.equal(result.code, null);
+	assert.throws(() => readFileSync(mark));
+});
+
+test('killLiveGroups kills the running process groups at once', async () => {
+	const running = realExec('sleep', ['30']);
+	await new Promise((wake) => setTimeout(wake, 100));
+	const started = Date.now();
+	killLiveGroups();
+	const result = await running;
+	assert.ok(Date.now() - started < 5000);
+	assert.equal(result.code, null);
 });

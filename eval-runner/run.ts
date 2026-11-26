@@ -44,7 +44,7 @@ const USAGE = `Usage: node eval-runner/run.ts <spec.json> [--dry-run] [--runs N]
   --spec-dir D  the value of EVAL_SPEC_DIR (default: the folder of the spec file). eval diff sets it.
 `;
 
-type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; noGrade: boolean; bin: Record<AgentName, string>; docker: string; out: string; specDir?: string };
+export type Options = { specPath: string; dryRun: boolean; runs?: number; only?: string[]; keep: boolean; noCache: boolean; noGrade: boolean; bin: Record<AgentName, string>; docker: string; out: string; specDir?: string };
 
 function parseArgs(argv: string[]): Options | 'help' {
 	const options: Options = { specPath: '', dryRun: false, keep: false, noCache: false, noGrade: false, bin: { claude: 'claude', codex: 'codex', opencode: 'opencode' }, docker: 'docker', out: join(import.meta.dirname, 'out') };
@@ -78,7 +78,7 @@ function parseArgs(argv: string[]): Options | 'help' {
 	return options;
 }
 
-type Planned = { id: string; config: Config; index: number };
+export type Planned = { id: string; config: Config; index: number };
 
 // Round-robin: a stop on budget leaves balanced samples, and a drift over time spreads over every configuration.
 // `have` counts the cached runs of a config: its new runs start after them.
@@ -127,10 +127,18 @@ function outcomeOf(config: Config, stdout: string, prompt: string, start: number
 	return claudeOutcome(stdout);
 }
 
-type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string; opencodeVersion?: string };
-type RunOutcome = { record: RunRecord; failed: boolean };
+// `signal`: a campaign aborts the run with it. Only the setup and the agent carry it: the cleanup always runs.
+export type RunContext = { exec: Exec; spec: Spec; options: Options; baseSha: string; evalId: string; evalDir: string; image: string; opencodeVersion?: string; signal?: AbortSignal };
+// `transient`: the run failed for a reason that a new run can fix (an overloaded API, an agent killed by a signal).
+export type RunOutcome = { record: RunRecord; failed: boolean; transient: boolean };
 
-async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion }: RunContext, planned: Planned): Promise<RunOutcome> {
+class Interrupted extends Error {}
+// What the agent CLIs print when the API is busy or the network drops.
+const TRANSIENT = /overloaded|\b529\b|rate.?limit|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|temporarily unavailable|\b50[234]\b/i;
+// A process that never started (a missing executable) is not transient: a new run fails the same way.
+const NOT_STARTED = /\bspawn\b|ENOENT|EACCES/;
+
+export async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion, signal }: RunContext, planned: Planned): Promise<RunOutcome> {
 	const sessionId = randomUUID();
 	const name = containerName(evalId, planned.id);
 	const runDir = join(evalDir, 'runs', planned.id);
@@ -145,6 +153,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 	mkdirSync(runDir, { recursive: true });
 	const record: RunRecord = { id: planned.id, config: planned.config.name, status: 'error', sessionId };
 	let failed = false;
+	let transient = false;
 	try {
 		gitDir = mkdtempSync(join(tmpdir(), 'eval-runner-git-'));
 		chmodSync(gitDir, 0o700);
@@ -152,7 +161,8 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		// The setup command (an install) runs after the setup commit: its untracked output (node_modules) stays out of
 		// the diff, as long as .gitignore lists it.
 		if (spec.task.setup) {
-			const prepared = await exec('sh', ['-c', spec.task.setup.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.setup.timeoutSec * 1000 });
+			const prepared = await exec('sh', ['-c', spec.task.setup.command], { cwd: clone, env: { EVAL_SPEC_DIR: spec.dir }, timeoutMs: spec.task.setup.timeoutSec * 1000, signal });
+			if (prepared.aborted) throw new Interrupted();
 			writeFileSync(join(runDir, 'setup.log'), (prepared.stdout + prepared.stderr).slice(-64 * 1024));
 			if (prepared.code !== 0 || prepared.timedOut) throw new Error(`setup failed (${prepared.timedOut ? 'timeout' : `exit code ${prepared.code}`}): see setup.log`);
 		}
@@ -170,7 +180,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		for (const file of invocation.files) writeFileSync(file.path, file.content);
 
 		const started = Date.now();
-		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000 });
+		const agent = await exec(invocation.command, invocation.args, { cwd: clone, input: invocation.input, env: invocation.env, timeoutMs: spec.task.timeoutSec * 1000, signal });
 		record.wallSec = Math.round((Date.now() - started) / 100) / 10;
 		// After a timeout the container still runs: it must be gone before the diff and the acceptance command.
 		if (planned.config.container) await removeContainer(exec, name, options.docker);
@@ -185,10 +195,12 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 			network = undefined;
 		}
 		writeFileSync(join(runDir, agentName === 'claude' ? 'claude.json' : 'events.jsonl'), agent.stdout);
+		if (agent.aborted) throw new Interrupted();
 		const outcome = outcomeOf(planned.config, agent.stdout, prompt, started);
 		record.cliCostUsd = outcome.costUsd === null ? null : Math.round(outcome.costUsd * 10_000) / 10_000;
 		const status: Status = agent.timedOut ? 'timeout' : outcome.budget ? 'budget' : agent.code !== 0 || outcome.isError ? 'error' : 'ok';
 		record.status = status;
+		transient = status === 'error' && ((agent.code === null && !NOT_STARTED.test(agent.stderr)) || TRANSIENT.test(`${agent.stderr} ${outcome.note ?? ''}`));
 		if (status === 'error') record.note = (agent.stderr.trim() || outcome.note || `exit code ${agent.code}`).slice(0, 300);
 		else if (outcome.note) record.note = outcome.note.slice(0, 300);
 		// A stopped proxy cuts the agent off its API: the failure is the runner's, and the note says so first.
@@ -231,10 +243,16 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 
 		record.acceptance = await runCheck(exec, spec.task, spec.dir, clone, runDir);
 	} catch (error) {
-		record.status = 'error';
-		record.note = (error as Error).message.slice(0, 300);
-		console.error(`${planned.id}: ${record.note}`);
-		failed = true;
+		if (error instanceof Interrupted) {
+			// The agent never finished: the run is no sample, and its files are partial.
+			record.status = 'interrupted';
+			record.note = 'interrupted';
+		} else {
+			record.status = 'error';
+			record.note = (error as Error).message.slice(0, 300);
+			console.error(`${planned.id}: ${record.note}`);
+			failed = true;
+		}
 	} finally {
 		if (gitDir) await removeWorkspace(gitDir);
 		// Backstop: an error between the start and the first removal.
@@ -244,7 +262,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		if (home) await removeWorkspace(home);
 		if (!options.keep) await removeWorkspace(clone);
 	}
-	return { record, failed };
+	return { record, failed, transient };
 }
 
 function writeIndex(out: string) {
@@ -263,39 +281,38 @@ export async function main(argv: string[], exec: Exec = realExec): Promise<numbe
 	return (await runEval(argv, exec)).code;
 }
 
-// Same as main, and it names the eval directory, so a caller (eval diff) can read the result.
-export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ code: number; evalDir?: string }> {
-	let options: Options | 'help';
-	let spec: Spec;
-	try {
-		options = parseArgs(argv);
-		if (options === 'help') {
-			console.log(USAGE);
-			return { code: 0 };
-		}
-		spec = loadSpec(options.specPath);
-		if (options.specDir) spec.dir = options.specDir;
-		if (options.runs) spec.runs = options.runs;
-		if (options.only) {
-			const unknown = options.only.filter((name) => !spec.configs.some((config) => config.name === name));
-			if (unknown.length > 0) throw new SpecError(`--only: unknown config ${unknown.join(', ')}`);
-			spec.configs = spec.configs.filter((config) => options.only!.includes(config.name));
-		}
-	} catch (error) {
-		if (!(error instanceof SpecError)) throw error;
-		console.error(`${error.message}\n\n${USAGE}`);
-		return { code: error.exitCode };
-	}
+// What an eval needs before its first run: the base commit, the CLI versions, the edits of each config, the cache keys
+// and the runs that the cache gives. `runEval` and a campaign both start here.
+export type Prepared = {
+	spec: Spec;
+	options: Options;
+	baseSha: string;
+	evalId: string;
+	evalDir: string;
+	image: string;
+	versions: Partial<Record<AgentName, string>>;
+	cliVersion: string;
+	edited: Record<string, EditedFile[]>;
+	editErrors: Record<string, string>;
+	keys: Record<string, string>;
+	cacheDir: string;
+	// The runs reused from the cache, and how many each config has.
+	reused: RunRecord[];
+	have: Record<string, number>;
+	// The patch file of each config with edits, by config name. `startEval` fills it.
+	editsPatches: Record<string, string>;
+};
 
+// `baseSha`: a campaign that resumes names the commit of its first start, so the runs stay comparable.
+// `cache: false`: the eval reads no cached run, and a campaign never does.
+export async function prepareEval(exec: Exec, spec: Spec, options: Options, { evalId, evalDir, baseSha: known, cache = true }: { evalId: string; evalDir: string; baseSha?: string; cache?: boolean }): Promise<Prepared | { code: number }> {
 	let baseSha: string;
 	try {
-		baseSha = await resolveBase(exec, spec.task.repo, spec.task.base);
+		baseSha = known ?? (await resolveBase(exec, spec.task.repo, spec.task.base));
 	} catch (error) {
 		console.error((error as Error).message);
 		return { code: 2 };
 	}
-	const evalId = evalIdOf(spec.name);
-	const evalDir = join(options.out, evalId);
 	// The version of each agent CLI of the spec. A Claude-only eval keeps the plain version string. A container config
 	// takes the image tag: the tag names the Dockerfile, which pins the CLI versions.
 	const image = imageTag();
@@ -329,7 +346,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const cacheDir = join(options.out, 'cache');
 	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir, edited: edited[config.name] })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
-	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' || editErrors[config.name] ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
+	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, !cache || options.noCache || versionOf(config) === 'unknown' || editErrors[config.name] ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
 	// A reused run carries no grade: recheck.ts copies a graded record into the cache, and the graders of this spec grade it again.
 	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record: { grades: _grades, ...record } }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
 	// The behavior counts of a reused run come from its saved transcript, with the command patterns of this spec.
@@ -340,7 +357,72 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		Object.assign(record.metrics, behavior.metrics);
 		record.steps = behavior.steps;
 	}
-	const planned = planRuns(spec.configs, spec.runs, Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length])));
+	const have = Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length]));
+	return { spec, options, baseSha, evalId, evalDir, image, versions, cliVersion, edited, editErrors, keys, cacheDir, reused, have, editsPatches: {} };
+}
+
+// Creates the eval directory and writes what each config measured: the diff of its edited files against the base.
+export async function startEval(exec: Exec, prepared: Prepared) {
+	mkdirSync(join(prepared.evalDir, 'runs'), { recursive: true });
+	for (const [name, files] of Object.entries(prepared.edited)) {
+		const path = `configs/${name}/${prepared.baseSha.slice(0, 7)}/edits.patch`;
+		mkdirSync(join(prepared.evalDir, dirname(path)), { recursive: true });
+		writeFileSync(join(prepared.evalDir, path), await editsPatch(exec, files));
+		prepared.editsPatches[name] = path;
+	}
+}
+
+export function saveEval({ spec, evalId, evalDir, cliVersion, baseSha, editsPatches }: Prepared, runs: RunRecord[], spent: number) {
+	const stats = aggregate(runs, spec.configs.map((config) => config.name));
+	const saved = {
+		schema: 'eval-runner/v1',
+		id: evalId,
+		name: spec.name,
+		generatedAt: new Date().toISOString(),
+		cliVersion,
+		baseSha,
+		spec,
+		spent: dollars(spent),
+		configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name], ...(editsPatches[config.name] ? { editsPatch: editsPatches[config.name] } : {}) })),
+		runs
+	};
+	writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
+}
+
+// The cost that a run adds to the spend. A run with no CLI cost (timeout, crash) reserves its full cap. The priced
+// transcript cost is a separate metric.
+export const spentBy = (record: RunRecord, perRunUsd: number) => (typeof record.cliCostUsd === 'number' && Number.isFinite(record.cliCostUsd) && record.cliCostUsd >= 0 ? record.cliCostUsd : perRunUsd);
+
+// Same as main, and it names the eval directory, so a caller (eval diff) can read the result.
+export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ code: number; evalDir?: string }> {
+	let options: Options | 'help';
+	let spec: Spec;
+	try {
+		options = parseArgs(argv);
+		if (options === 'help') {
+			console.log(USAGE);
+			return { code: 0 };
+		}
+		spec = loadSpec(options.specPath);
+		if (options.specDir) spec.dir = options.specDir;
+		if (options.runs) spec.runs = options.runs;
+		if (options.only) {
+			const unknown = options.only.filter((name) => !spec.configs.some((config) => config.name === name));
+			if (unknown.length > 0) throw new SpecError(`--only: unknown config ${unknown.join(', ')}`);
+			spec.configs = spec.configs.filter((config) => options.only!.includes(config.name));
+		}
+	} catch (error) {
+		if (!(error instanceof SpecError)) throw error;
+		console.error(`${error.message}\n\n${USAGE}`);
+		return { code: error.exitCode };
+	}
+
+	const evalId = evalIdOf(spec.name);
+	const evalDir = join(options.out, evalId);
+	const prepared = await prepareEval(exec, spec, options, { evalId, evalDir });
+	if ('code' in prepared) return prepared;
+	const { baseSha, image, versions, edited, editErrors, keys, cacheDir, reused, have } = prepared;
+	const planned = planRuns(spec.configs, spec.runs, have);
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 
 	console.log(`Eval ${evalId}: ${planned.length} runs (${spec.configs.length} configs x ${spec.runs}, ${reused.length} from the cache) on ${spec.task.repo} at ${baseSha.slice(0, 7)}`);
@@ -355,15 +437,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	if (options.dryRun) return { code: 0 };
 
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
-	mkdirSync(join(evalDir, 'runs'), { recursive: true });
-	// What each config measured: the diff of its edited files against the base.
-	const editsPatches: Record<string, string> = {};
-	for (const [name, files] of Object.entries(edited)) {
-		const path = `configs/${name}/${baseSha.slice(0, 7)}/edits.patch`;
-		mkdirSync(join(evalDir, dirname(path)), { recursive: true });
-		writeFileSync(join(evalDir, path), await editsPatch(exec, files));
-		editsPatches[name] = path;
-	}
+	await startEval(exec, prepared);
 	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion: versions.opencode };
 	const runs: RunRecord[] = [...reused];
 	let spent = 0;
@@ -392,29 +466,13 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 			console.error(`${run.id}: the agent changed the working tree of ${spec.task.repo}. The eval stops. Check \`git status\` there.`);
 			break;
 		}
-		// A run with no CLI cost (timeout, crash) reserves its full cap. The priced transcript cost is a separate metric.
-		spent += typeof record.cliCostUsd === 'number' && Number.isFinite(record.cliCostUsd) && record.cliCostUsd >= 0 ? record.cliCostUsd : spec.budget.perRunUsd;
+		spent += spentBy(record, spec.budget.perRunUsd);
 		runs.push(record);
 		console.log(`[${position + 1}/${planned.length}] ${run.id} ${record.status}, check ${record.acceptance?.passed ? 'passed' : 'failed'}, ${record.metrics?.cost ?? '?'} $, ${record.wallSec ?? '?'} s`);
 	}
 
 	for (const config of spec.configs) writeCache(cacheDir, keys[config.name], evalId, runs.filter((run) => run.config === config.name && !run.cached));
-	const save = () => {
-		const stats = aggregate(runs, spec.configs.map((config) => config.name));
-		const saved = {
-			schema: 'eval-runner/v1',
-			id: evalId,
-			name: spec.name,
-			generatedAt: new Date().toISOString(),
-			cliVersion,
-			baseSha,
-			spec,
-			spent: dollars(spent),
-			configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name], ...(editsPatches[config.name] ? { editsPatch: editsPatches[config.name] } : {}) })),
-			runs
-		};
-		writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));
-	};
+	const save = () => saveEval(prepared, runs, spent);
 	save();
 	writeIndex(options.out);
 	// The graders come after the run cache, so a cached run never carries a grade into a later eval. eval.json exists

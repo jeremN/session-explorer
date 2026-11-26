@@ -446,6 +446,103 @@ pnpm eval:matrix --exclude <evalId>,<evalId>/<runId>   # leave out an eval, or o
 
 The report never edits `~/.claude/model-matrix.md`.
 
+### Campaign
+
+A campaign runs several tasks (specs) under several configs, with one budget and one reference config. It then reports each difference to the reference with its uncertainty. Use it in place of a shell loop over specs and tables that you paste together.
+
+```sh
+pnpm eval:campaign campaign.json --dry-run      # print the planned runs and the maximum spend. Starts no agent.
+pnpm eval:campaign campaign.json                # real run: it starts the agents and costs money
+pnpm eval:campaign campaign.json --resume eval-runner/out/campaigns/<id>   # run what is missing or interrupted
+pnpm eval:campaign-report <evalDir>... --reference bare   # the report of finished evals, no run
+```
+
+Options: `[--dry-run] [--no-grade] [--resume <campaignDir>] [--keep] [--claude <path>] [--codex <path>] [--opencode <path>] [--docker <path>] [--out <dir>]`. Exit codes: 0 done, 1 a run failed to start or an I/O error, 2 invalid file or arguments, 130 stopped by Ctrl-C.
+
+#### Campaign file
+
+One JSON file. Paths in `specs` resolve against the folder of the campaign file. Each spec keeps its own task, its configs and its graders.
+
+| Field | Meaning |
+|---|---|
+| `name` | Slug, `[a-z0-9-]+`. |
+| `specs` | Paths of the spec files. Each spec needs its own `name`: it names the result folder. |
+| `configs` | Optional. The config names to run, in this order. Each name must exist in every spec. Without it, the campaign runs every config of the specs, and the specs must have the same config names. |
+| `reference` | The config that the others are compared to. It must be one of the configs. |
+| `runs` | Runs per config per spec, 1 to 20. It replaces `runs` of the specs. |
+| `order` | `interleaved` (default) or `grouped`. |
+| `concurrency` | Runs at the same time, 1 to 16. Default 1. |
+| `budget` | `{ usd, gradersUsd? }`. `usd` is the budget of all the agent runs of all the specs. `gradersUsd` is the budget of all the command graders. |
+| `retries` | Retries of a transient failure, 0 to 5. Default 0. |
+
+```json
+{
+  "name": "harness-turns",
+  "specs": ["suites/vm-traffic-upstream.json", "suites/vm-csp-replay-hash.json"],
+  "configs": ["vm-harness", "vm-harness-turns1"],
+  "reference": "vm-harness",
+  "runs": 3,
+  "order": "interleaved",
+  "concurrency": 2,
+  "budget": { "usd": 40 },
+  "retries": 1
+}
+```
+
+#### Output
+
+`eval-runner/out/campaigns/<timestamp>-<name>/` holds `campaign.json` and one folder per spec. A spec folder has the format of an eval folder (`eval.json`, `runs/`), so the viewer, `eval:grade` and `eval:metrics` work on it. `campaign.json` holds the file as resolved, the SHA of each base commit, the state of each run (`status`, `attempts`, `costUsd`), the spend and the report. `eval-runner/out/campaigns/index.json` lists the campaigns for the viewer.
+
+A campaign does not use the run cache. A reused run would break the order and the counts. The grade cache sits in the campaign folder.
+
+#### Order
+
+- `interleaved`: run by run, and in each round spec by spec, then config by config. A drift of the API or of the cache then spreads over every config, and a stop on the budget leaves balanced samples.
+- `grouped`: spec, then config, then run. Use it when a spec has a slow setup that you want to keep warm.
+
+#### Budget
+
+- Each run reserves a cost estimate before it starts: the median cost of the finished runs of its spec, or `budget.perRunUsd` of the spec while none has finished.
+- A run starts only when `spent + reserved + estimate` stays within `budget.usd`. The reservation makes parallel runs safe: they cannot pass the budget together.
+- At the first run that does not fit, the campaign stops all new runs. In `campaign.json` these runs have the status `budget`. In `eval.json` they have the status `skipped` and a note, and they do not count in `n`.
+- A run with no CLI cost (a crash, a timeout) adds its `perRunUsd` to the spend.
+- `budget.gradersUsd` is shared. The specs grade one after the other with what is left. Without it, each spec keeps its own `budget.gradersUsd`.
+- `perEvalUsd` of a spec does not apply in a campaign. `perRunUsd` still caps each run.
+
+#### Retries
+
+A run that fails for a transient reason runs again, up to `retries` times, after a wait of 5 s, 10 s, 20 s and so on. A transient reason is an agent that a signal killed, or an error text with `overloaded`, `529`, `rate limit`, `502`, `503`, `504`, `ECONNRESET`, `ETIMEDOUT` or `EAI_AGAIN`. A timeout, a failed check and a missing executable are not transient. The cost of every attempt counts in the budget and in `costUsd`. The record in `eval.json` is the last attempt. A retry that does not fit in the budget does not start.
+
+#### Cancel and resume
+
+- Ctrl-C (SIGINT or SIGTERM) stops the campaign. Queued runs never start. Running agents get SIGTERM, then SIGKILL after 10 s, on their whole process group. These runs get the status `interrupted` and do not count in `n`. The runner writes `campaign.json` and exits with 130. It skips the graders.
+- A run that is in its acceptance check finishes the check first.
+- A second Ctrl-C kills every agent group and exits at once. A container of a killed agent can stay: `docker ps` shows it, and its name starts with `eval-`.
+- `--resume <campaignDir>` runs only the runs that are missing or `interrupted`. It keeps the finished runs, the SHA of each base commit and the spend. The campaign file is optional on a resume: without it, the runner reads the file that `campaign.json` holds. A run that stopped on the budget stays stopped. To run more, start a new campaign.
+
+#### The report
+
+For each config, against the reference: one cell per spec and one pooled cell. The runner prints it, saves it in `campaign.json`, and the "Évaluations" view shows it. `pnpm eval:campaign-report <evalDir>... --reference <config> [--resamples N] [--seed N] [--json]` computes it from finished evals, with no run. A `skipped` or `interrupted` run is no sample.
+
+| Statistic | Method |
+|---|---|
+| Pass rate difference | The weighted difference of the rates of the two configs. |
+| Pass rate p-value | Fisher exact test, two-sided, on the 2x2 table of the pooled counts. It uses the hypergeometric law and adds the probability of every table that is not more likely than the observed one. It is exact, not an approximation. |
+| Pass rate interval | Percentile bootstrap, 95 %, stratified by spec: it draws with replacement inside each spec and inside each config. |
+| Cost, turns, tool calls | The difference of the medians, by spec, then the weighted average over the specs. A metric that no run has stays out of the table. `turns` has no source yet: the report shows it once runs carry `metrics.turns`. |
+| Metric p-value | Permutation test, two-sided. It shuffles the config labels inside each spec, and never across specs. The p-value counts the observed arrangement as one shuffle, so it is never 0. |
+| Metric interval | The same stratified bootstrap, 95 %. |
+| Grader findings | For each grader: the share of runs flagged among the runs with an `ok` grade, a Fisher p-value on the counts, and a stratified bootstrap interval of the difference of shares. |
+| Power | The runs per config for 80 % power at alpha 0.05. For each n from 2 up, it draws 1000 pairs of binomial counts with the observed rates, and counts the pairs where Fisher gives p below 0.05. The first n that reaches 80 % wins. It shows "over 200 runs" when no n up to 200 does. With equal observed rates it shows "no observed difference". |
+
+Details:
+
+- The weight of a spec in a pooled difference is `na * nb / (na + nb)`, with `na` and `nb` the run counts of the two configs in that spec. With equal counts it is the plain average.
+- A permutation or a bootstrap uses 10 000 resamples. `--resamples` changes it. The generator is `mulberry32`, seeded: the same runs and the same seed give the same report. The seed of each statistic comes from its label (config, spec, metric), so the result does not depend on the order of the computation.
+- The bootstrap interval always holds the point estimate. With a few runs the percentiles can miss it, and the report then widens the interval to it.
+- The Fisher test of a pooled cell ignores the specs. If the specs differ much in difficulty and the counts per spec are unbalanced, trust the stratified interval more than the pooled p-value.
+- The power uses the observed rates. They are noisy with a few runs: read it as an order of magnitude.
+
 ### Budget
 
 - Each run gets `--max-budget-usd <perRunUsd>`.
@@ -494,6 +591,7 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 | `runs/<runId>/acceptance.log` | The last 64 KB of the acceptance output. |
 | `runs/<runId>/grade-<name>.log` | The stdout and the stderr of the command grader `<name>`. |
 | `eval-runner/out/index.json` | The list of evals. |
+| `eval-runner/out/campaigns/<id>/` | A campaign: `campaign.json` and one eval folder per spec. See [Campaign](#campaign). |
 
 > **Warning:** the output holds your transcripts and the agent diffs. Do not commit or share it.
 

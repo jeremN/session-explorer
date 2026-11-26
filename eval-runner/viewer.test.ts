@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { editsPaths, metricCell, passPill, renderEval, renderEvalOptions, renderRuns, renderWatch, testShares } from '../session-explorer/viewer/evals.mjs';
+import { editsPaths, evalPath, metricCell, passPill, renderCampaign, renderCampaignList, renderEval, renderEvalOptions, renderRuns, renderWatch, testShares } from '../session-explorer/viewer/evals.mjs';
 
 const spread = (values: number[]) => {
 	const sorted = [...values].sort((a, b) => a - b);
@@ -204,3 +204,75 @@ test('a config with edits shows the diff it measured in a collapsible block, esc
 	assert.deepEqual(editsPaths(data), { terse: 'configs/terse/1a2b3c4/edits.patch' });
 });
 
+
+const cell = (diff: number, ci: [number, number], cost: number, costCi: [number, number]) => ({ n: { config: 6, reference: 6 }, pass: { config: { passed: 5, n: 6 }, reference: { passed: 3, n: 6 }, diff, p: 0.2, ci, power: 40 }, metrics: { cost: { config: 1, reference: 2, n: { config: 6, reference: 6 }, diff: cost, p: 0.03, ci: costCi } }, graders: {} });
+const campaign = () => ({
+	id: '20261126-100000-cmp',
+	name: 'cmp',
+	status: 'done',
+	reference: 'base',
+	spent: 12.5,
+	configs: ['base', 'tested'],
+	specs: [
+		{ name: 'alpha', evalId: '20261126-100000-cmp-alpha' },
+		{ name: '<b>beta', evalId: 'x' }
+	],
+	results: [{ spec: 'alpha', id: 'base-1', config: 'base', status: 'ok', attempts: 1, costUsd: 1 }],
+	report: {
+		reference: 'base',
+		resamples: 1000,
+		seed: 1,
+		specs: ['alpha', '<b>beta'],
+		configs: [{ name: 'tested', perSpec: { alpha: cell(0.33, [0.1, 0.5], -1, [-1.2, -0.8]), '<b>beta': cell(-0.16, [-0.4, 0.1], 0.5, [-0.1, 0.9]) }, pooled: cell(0.2, [0.05, 0.35], -0.4, [-0.6, -0.2]) }]
+	}
+});
+
+test('an eval path keeps its slashes and encodes each segment', () => {
+	assert.equal(evalPath('20261126-100000-task'), '20261126-100000-task');
+	assert.equal(evalPath('campaigns/20261126-100000-cmp/a b'), 'campaigns/20261126-100000-cmp/a%20b');
+});
+
+test('the campaign view has one row per config, a column per spec and a pooled column', () => {
+	const html = renderCampaign(campaign());
+	assert.equal(html.match(/<tbody>[\s\S]*<\/tbody>/)![0].match(/<tr>/g)?.length, 1);
+	const head = html.split('<thead>')[1].split('</thead>')[0];
+	assert.match(head, />alpha</);
+	assert.match(head, /&lt;b&gt;beta/);
+	assert.match(head, /Cumul/);
+	assert.doesNotMatch(html, /<b>beta/);
+	assert.match(html, /tested/);
+	// A cell: the pass rate difference with its interval, and the cost difference with its interval.
+	assert.match(html, /\+33 pts/);
+	assert.match(html, /\[\+10, \+50\]/);
+	assert.match(html, /−1\.00 \$/);
+	// Each spec column links to the eval view of its folder.
+	assert.match(html, /href="#evals\/campaigns\/20261126-100000-cmp\/alpha"/);
+	assert.match(html, /réf\. base/);
+});
+
+test('a difference whose interval leaves zero has a tone, and one that holds zero has none', () => {
+	const html = renderCampaign(campaign());
+	// Pass rate up with an interval above 0: positive. Cost down with an interval below 0: positive too.
+	const alpha = html.split('<tbody>')[1].split('<td')[1];
+	assert.match(alpha, /data-tone="positive"[^>]*>\+33 pts/);
+	assert.match(alpha, /data-tone="positive"[^>]*>−1\.00 \$/);
+	const beta = html.split('<tbody>')[1].split('<td')[2];
+	assert.match(beta, /data-tone="neutral"[^>]*>−16 pts/);
+});
+
+test('a campaign with no report says so, and the list links each campaign', () => {
+	const bare = campaign();
+	delete (bare as { report?: unknown }).report;
+	assert.match(renderCampaign(bare), /Pas de rapport/);
+	assert.equal(renderCampaignList([]), '');
+	const list = renderCampaignList([{ id: '20261126-100000-cmp', name: 'c<mp', generatedAt: '2026-11-26T10:00:00Z', status: 'interrupted', specs: ['a', 'b'], configs: ['base', 'tested'], reference: 'base', runs: 8, cost: 3.2 }]);
+	assert.match(list, /href="#evals\/campaigns\/20261126-100000-cmp"/);
+	assert.match(list, /c&lt;mp/);
+	assert.match(list, /interrompue/);
+});
+
+test('the runs panel shows an interrupted run with its own label', () => {
+	const data = sample();
+	data.runs.push(run('terse-2', 'terse', { status: 'interrupted', sessionId: undefined }));
+	assert.match(renderRuns(data), /interrompu/);
+});

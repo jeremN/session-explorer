@@ -107,3 +107,9 @@ test('aggregate spreads the behavior metrics, and a run of an older eval without
 	assert.equal(stats.cost.n, 2);
 	assert.equal('rereads' in stats, false);
 });
+
+test('an interrupted run is no sample of its configuration', () => {
+	const runs = [run('a', 'ok', 1, true), run('a', 'interrupted', 0, false), run('a', 'skipped', 0, false)];
+	assert.deepEqual(passRate(runs), { passed: 1, n: 1 });
+	assert.equal(aggregate(runs, ['a']).a.pass.n, 1);
+});

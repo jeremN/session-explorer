@@ -42,7 +42,8 @@ const STATUS = {
 	timeout: ['délai dépassé', 'warning'],
 	budget: ['budget', 'warning'],
 	error: ['erreur', 'negative'],
-	skipped: ['ignoré', 'neutral']
+	skipped: ['ignoré', 'neutral'],
+	interrupted: ['interrompu', 'warning']
 };
 // The classes of a step, in the order of the legend. A class outside this list is drawn as other.
 const STEPS = {
@@ -233,7 +234,7 @@ export function renderEdits(ev, patches = {}) {
 /** The whole view for one eval: header panel, comparison panel, variants panel, runs panel. `patches`: the text of
  * each edits.patch, by config name. */
 export function renderEval(ev, patches = {}) {
-	const started = ev.runs.filter((run) => run.status !== 'skipped');
+	const started = ev.runs.filter((run) => run.status !== 'skipped' && run.status !== 'interrupted');
 	const passed = started.filter((run) => run.acceptance?.passed).length;
 	const seconds = started.reduce((total, run) => total + (run.wallSec ?? 0), 0);
 	const tested = started.filter((run) => run.acceptance?.tests?.total > 0 && !run.acceptance.infra);
@@ -274,4 +275,64 @@ export function renderWatch(state) {
 		return '<tr><td>' + esc(saved.label ?? name) + '</td><td>' + pill(label, tone) + '</td><td>' + esc(day) + '</td><td>' + link + '</td></tr>';
 	});
 	return '<section class="panel"><h3>Fichiers surveillés</h3><div class="ev-scroll"><table class="ev-table"><thead><tr><th scope="col">Fichier</th><th scope="col">Dernière mesure</th><th scope="col">Date</th><th scope="col"></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div></section>';
+}
+
+/** The path of an eval folder under `evals/`. An id of a campaign eval holds slashes: each segment is encoded, not the slashes. */
+export const evalPath = (id) => String(id).split('/').map(encodeURIComponent).join('/');
+
+const CAMPAIGN_STATUS = {
+	done: ['terminée', 'positive'],
+	interrupted: ['interrompue', 'warning'],
+	running: ['en cours', 'info']
+};
+
+/** The "Campagnes" panel, from evals/campaigns/index.json. */
+export function renderCampaignList(campaigns) {
+	if (!campaigns?.length) return '';
+	const rows = campaigns.map((item) => {
+		const [label, tone] = CAMPAIGN_STATUS[item.status] ?? [item.status, 'neutral'];
+		const day = new Date(item.generatedAt).toLocaleDateString('fr-FR');
+		return (
+			'<tr><td>' + esc(item.name) + '</td><td>' + pill(label, tone) + '</td><td>' + esc(day) + '</td><td>' + item.specs.length + ' specs × ' + item.configs.length + ' configs</td><td>' + item.runs + ' runs</td><td>' + Number(item.cost).toFixed(2) + ' $</td>' +
+			'<td><a href="#evals/campaigns/' + esc(encodeURIComponent(item.id)) + '">→ campagne</a></td></tr>'
+		);
+	});
+	return '<section class="panel"><h3>Campagnes</h3><div class="ev-scroll"><table class="ev-table"><thead><tr><th scope="col">Campagne</th><th scope="col">Statut</th><th scope="col">Date</th><th scope="col">Plan</th><th scope="col">Runs</th><th scope="col">Coût</th><th scope="col"></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div></section>';
+}
+
+const sign = (value) => (value < 0 ? '−' : '+');
+const points = (value) => sign(value) + Math.round(Math.abs(value) * 100) + ' pts';
+const dollars = (value) => sign(value) + Math.abs(value).toFixed(2) + ' $';
+// An interval that leaves 0 gives a tone. `lowIsGood`: a drop is the better result (the cost).
+const toneOf = ([low, high], lowIsGood) => (low > 0 ? (lowIsGood ? 'negative' : 'positive') : high < 0 ? (lowIsGood ? 'positive' : 'negative') : 'neutral');
+
+// One cell of the campaign table: the pass rate difference and the cost difference, each with its interval.
+function campaignCell(cell) {
+	if (!cell) return '<td>—</td>';
+	const pass = cell.pass;
+	let html = pill(points(pass.diff), toneOf(pass.ci, false)) + ' <span class="ev-range">[' + points(pass.ci[0]).replace(' pts', '') + ', ' + points(pass.ci[1]).replace(' pts', '') + ']</span>';
+	const cost = cell.metrics?.cost;
+	if (cost) html += '<br>' + pill(dollars(cost.diff), toneOf(cost.ci, true)) + ' <span class="ev-range">[' + dollars(cost.ci[0]).replace(' $', '') + ', ' + dollars(cost.ci[1]).replace(' $', '') + ']</span>';
+	html += '<br><span class="ev-range">' + pass.config.passed + '/' + pass.config.n + ' contre ' + pass.reference.passed + '/' + pass.reference.n + '</span>';
+	return '<td>' + html + '</td>';
+}
+
+/** The view of one campaign: a row per config, a column per spec and a pooled column. Each cell is the difference to the
+ * reference with its 95 % interval. A spec heading links to the eval view of that spec. */
+export function renderCampaign(campaign) {
+	const statuses = {};
+	for (const result of campaign.results ?? []) statuses[result.status] = (statuses[result.status] ?? 0) + 1;
+	const counts = Object.entries(statuses).map(([name, count]) => count + ' ' + name).join(', ');
+	const line = esc(campaign.name) + ' · réf. ' + esc(campaign.reference) + ' · ' + (campaign.results?.length ?? 0) + ' runs (' + esc(counts) + ') · ' + Number(campaign.spent ?? 0).toFixed(2) + ' $ dépensés';
+	const intro = '<section class="panel"><p class="ev-line">' + line + '</p></section>';
+	const report = campaign.report;
+	if (!report?.configs?.length) return intro + '<section class="panel"><p class="wsum">Pas de rapport : aucun run terminé pour comparer.</p></section>';
+	const specs = campaign.specs ?? [];
+	const head =
+		'<tr><th scope="col">Config</th>' +
+		specs.map((spec) => '<th scope="col"><a href="#evals/campaigns/' + esc(encodeURIComponent(campaign.id)) + '/' + esc(encodeURIComponent(spec.name)) + '">' + esc(spec.name) + '</a></th>').join('') +
+		'<th scope="col">Cumul</th></tr>';
+	const rows = report.configs.map((config) => '<tr><th scope="row">' + esc(config.name) + '</th>' + specs.map((spec) => campaignCell(config.perSpec[spec.name])).join('') + campaignCell(config.pooled) + '</tr>');
+	const note = 'Écart au regard de la config de référence (' + esc(report.reference) + '), intervalle à 95 % par rééchantillonnage (' + report.resamples + ' tirages). Taux de réussite en points, coût médian en dollars.';
+	return intro + '<section class="panel"><h3>Comparaison à la référence</h3><div class="ev-scroll"><table class="ev-table"><thead>' + head + '</thead><tbody>' + rows.join('') + '</tbody></table></div><p class="ev-legend">' + note + '</p></section>';
 }

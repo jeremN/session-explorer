@@ -2,7 +2,8 @@
 import type { BehaviorMetrics, StepClass } from '../session-explorer/behavior.ts';
 import type { TestCount } from './testcount.ts';
 
-export type Status = 'ok' | 'timeout' | 'budget' | 'error' | 'skipped';
+// `interrupted`: a campaign stopped the run (Ctrl-C). It is no sample, like `skipped`.
+export type Status = 'ok' | 'timeout' | 'budget' | 'error' | 'skipped' | 'interrupted';
 export type RunMetrics = {
 	// Absent when the agent gives no cost and the config no price.
 	cost?: number;
@@ -74,8 +75,8 @@ export function spread(values: number[]): Spread | undefined {
 	return { n: values.length, median: median(values), min: Math.min(...values), max: Math.max(...values), values };
 }
 
-// A skipped run never started. It is not a sample of the configuration.
-const counted = (runs: RunRecord[]) => runs.filter((run) => run.status !== 'skipped');
+// A skipped or interrupted run never finished. It is not a sample of the configuration.
+const counted = (runs: RunRecord[]) => runs.filter((run) => run.status !== 'skipped' && run.status !== 'interrupted');
 
 export function passRate(runs: RunRecord[]) {
 	const started = counted(runs);
