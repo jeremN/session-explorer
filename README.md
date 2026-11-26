@@ -533,7 +533,7 @@ For each config, against the reference: one cell per spec and one pooled cell. T
 | Metric p-value | Permutation test, two-sided. It shuffles the config labels inside each spec, and never across specs. The p-value counts the observed arrangement as one shuffle, so it is never 0. |
 | Metric interval | The same stratified bootstrap, 95 %. |
 | Grader findings | For each grader: the share of runs flagged among the runs with an `ok` grade, a Fisher p-value on the counts, and a stratified bootstrap interval of the difference of shares. |
-| Power | The runs per config for 80 % power at alpha 0.05. For each n from 2 up, it draws 1000 pairs of binomial counts with the observed rates, and counts the pairs where Fisher gives p below 0.05. The first n that reaches 80 % wins. It shows "over 200 runs" when no n up to 200 does, and for equal rates. |
+| Power | The runs per config for 80 % power at alpha 0.05. For each n from 2 up, it draws 1000 pairs of binomial counts with the observed rates, and counts the pairs where Fisher gives p below 0.05. The first n that reaches 80 % wins. It shows "over 200 runs" when no n up to 200 does. With equal observed rates it shows "no observed difference". |
 
 Details:
 

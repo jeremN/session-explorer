@@ -126,7 +126,8 @@ const signed = (value: number, digits = 2) => `${value >= 0 ? '+' : '-'}${Math.a
 const percent = (value: number) => `${Math.round(value * 100)} %`;
 const points = (value: number) => `${value >= 0 ? '+' : '-'}${Math.round(Math.abs(value) * 100)} pts`;
 const pText = (p: number) => (p < 0.001 ? 'p <0.001' : `p ${p.toFixed(3)}`);
-const powerText = (power: number | undefined) => (power === undefined ? 'power: over 200 runs' : `80 % power: ${power} runs`);
+// No power without an observed difference: the rates are equal, so no sample size is the answer.
+const powerText = (power: number | undefined, diff: number) => (diff === 0 ? 'power: no observed difference' : power === undefined ? 'power: over 200 runs' : `80 % power: ${power} runs`);
 
 // The text table: for each config, one line per spec and one pooled line, for the pass rate, each metric and each grader.
 export function renderReport(report: Report): string {
@@ -138,7 +139,7 @@ export function renderReport(report: Report): string {
 		lines.push('  pass rate');
 		for (const [label, cell] of rows) {
 			const { pass } = cell;
-			lines.push(`    ${label.padEnd(width)}${`${pass.config.passed}/${pass.config.n}`.padStart(6)} ${percent(rate(pass.config, pass.config.passed)).padStart(6)} vs ${`${pass.reference.passed}/${pass.reference.n}`.padStart(5)} ${percent(rate(pass.reference, pass.reference.passed)).padStart(6)}   ${points(pass.diff)} [${points(pass.ci[0])}, ${points(pass.ci[1])}]  Fisher ${pText(pass.p)}  ${powerText(pass.power)}`);
+			lines.push(`    ${label.padEnd(width)}${`${pass.config.passed}/${pass.config.n}`.padStart(6)} ${percent(rate(pass.config, pass.config.passed)).padStart(6)} vs ${`${pass.reference.passed}/${pass.reference.n}`.padStart(5)} ${percent(rate(pass.reference, pass.reference.passed)).padStart(6)}   ${points(pass.diff)} [${points(pass.ci[0])}, ${points(pass.ci[1])}]  Fisher ${pText(pass.p)}  ${powerText(pass.power, pass.diff)}`);
 		}
 		const keys = [...new Set(rows.flatMap(([, cell]) => Object.keys(cell.metrics)))];
 		for (const key of keys) {
@@ -156,7 +157,7 @@ export function renderReport(report: Report): string {
 			for (const [label, cell] of rows) {
 				const grader = cell.graders[name];
 				if (!grader) continue;
-				lines.push(`    ${label.padEnd(width)}${`${grader.config.flagged}/${grader.config.n}`.padStart(6)} vs ${`${grader.reference.flagged}/${grader.reference.n}`.padStart(5)}   ${points(grader.diff)} [${points(grader.ci[0])}, ${points(grader.ci[1])}]  Fisher ${pText(grader.p)}  ${powerText(grader.power)}`);
+				lines.push(`    ${label.padEnd(width)}${`${grader.config.flagged}/${grader.config.n}`.padStart(6)} vs ${`${grader.reference.flagged}/${grader.reference.n}`.padStart(5)}   ${points(grader.diff)} [${points(grader.ci[0])}, ${points(grader.ci[1])}]  Fisher ${pText(grader.p)}  ${powerText(grader.power, grader.diff)}`);
 			}
 		}
 	}
