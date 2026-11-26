@@ -13,6 +13,19 @@ const POLL_MS = 50;
 // After a normal exit, the SIGTERM to the rest of the group gets this grace before the SIGKILL.
 const EXIT_GRACE_MS = 1_000;
 
+// The process groups that run now. A second Ctrl-C kills them all before the runner exits: they are detached, so they
+// would outlive it.
+const liveGroups = new Set<number>();
+export function killLiveGroups() {
+	for (const pid of liveGroups) {
+		try {
+			process.kill(-pid, 'SIGKILL');
+		} catch {
+			// Already gone.
+		}
+	}
+}
+
 const sleep = (ms: number) => new Promise((wake) => setTimeout(wake, ms));
 
 // True while a process of the group exists, a zombie included.
@@ -31,6 +44,7 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 	new Promise((resolve) => {
 		if (abortSignal?.aborted) return resolve({ code: null, stdout: '', stderr: 'eval-runner: aborted before the start', timedOut: false, aborted: true });
 		const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+		if (child.pid !== undefined) liveGroups.add(child.pid);
 		let stdout = '';
 		let stderr = '';
 		let timedOut = false;
@@ -103,6 +117,7 @@ export const realExec: Exec = (command, args, { cwd, input, env, timeoutMs, kill
 			}
 			clearTimeout(killTimer);
 			clearTimeout(forceTimer);
+			if (child.pid !== undefined) liveGroups.delete(child.pid);
 			resolve({ code, stdout, stderr: stderr + extra, timedOut, ...(aborted ? { aborted } : {}) });
 		};
 		child.on('error', (error) => finish(null, error.message));

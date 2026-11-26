@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { realExec } from './exec.ts';
+import { killLiveGroups, realExec } from './exec.ts';
 
 const alive = (pid: number) => {
 	try {
@@ -124,4 +124,14 @@ test('a signal that is already aborted starts no process', async () => {
 	assert.equal(result.aborted, true);
 	assert.equal(result.code, null);
 	assert.throws(() => readFileSync(mark));
+});
+
+test('killLiveGroups kills the running process groups at once', async () => {
+	const running = realExec('sleep', ['30']);
+	await new Promise((wake) => setTimeout(wake, 100));
+	const started = Date.now();
+	killLiveGroups();
+	const result = await running;
+	assert.ok(Date.now() - started < 5000);
+	assert.equal(result.code, null);
 });
