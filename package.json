@@ -22,6 +22,8 @@
     "eval:watch": "node eval-runner/watch.ts",
     "eval:grade": "node eval-runner/grade.ts",
     "eval:metrics": "node eval-runner/metrics.ts",
-    "eval:edits": "node eval-runner/edits.ts"
+    "eval:edits": "node eval-runner/edits.ts",
+    "eval:campaign": "node eval-runner/campaign.ts",
+    "eval:campaign-report": "node eval-runner/campaign-report.ts"
   }
 }
