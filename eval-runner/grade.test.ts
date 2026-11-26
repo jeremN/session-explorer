@@ -370,8 +370,8 @@ test('a failing sample among ok ones keeps the grade ok; without a majority of o
 });
 
 test('the budget stops a grade between two samples, and a grade with no sample run gets the status budget', async () => {
-	// A sample costs 0.4 $: two samples reach the 0.5 $ budget, so the third sample and the next grade do not run.
-	const { specDir, evalDir } = await fixture('sample-budget', [{ ...review('ok'), samples: 3 }], { gradersUsd: 0.5 });
+	// A sample costs 0.4 $. After two samples (0.8 $) a third would pass the 0.9 $ budget, so it does not run, and the next grade does not run.
+	const { specDir, evalDir } = await fixture('sample-budget', [{ ...review('ok'), samples: 3 }], { gradersUsd: 0.9 });
 	assert.equal((await quiet(() => main([evalDir]))).code, 0);
 	assert.equal(seen(specDir).length, 2);
 	const grades: SampledGrade[] = saved(evalDir).runs.flatMap((run: { grades: { review: SampledGrade } }) => (run.grades.review.status === 'skipped' ? [] : [run.grades.review]));
@@ -383,6 +383,22 @@ test('the budget stops a grade between two samples, and a grade with no sample r
 	assert.equal(stopped.status, 'budget');
 	// A grade with a sample cut by the budget does not go to the cache: the next pass runs all its samples.
 	assert.equal(existsSync(join(evalDir, '..', 'cache', 'grades')), false);
+});
+
+test('a grade or a sample starts only when its estimate fits the budget, so the graders never overrun', async () => {
+	// A sample costs 0.4 $. The first grade runs (nothing spent). The second would end at 0.8 $, above 0.7 $: it does not start.
+	const grades = await fixture('fit-grades', [review('ok')], { gradersUsd: 0.7 });
+	assert.equal((await quiet(() => main([grades.evalDir]))).code, 0);
+	assert.equal(seen(grades.specDir).length, 1);
+	const statuses = saved(grades.evalDir).runs.flatMap((run: { grades: { review: { status: string } } }) => (run.grades.review.status === 'skipped' ? [] : [run.grades.review.status]));
+	assert.deepEqual(statuses.sort(), ['budget', 'ok']);
+
+	// Samples: the first runs, the second ends at 0.8 $ on a 0.7 $ budget and does not start. The spend stays under the cap.
+	const samples = await fixture('fit-samples', [{ ...review('ok'), samples: 3 }], { gradersUsd: 0.7 });
+	const { lines } = await quiet(() => main([samples.evalDir, '--runs', 'zebra-config-1']));
+	assert.equal(seen(samples.specDir).length, 1);
+	assert.deepEqual((saved(samples.evalDir).runs[0].grades.review as SampledGrade).samples!.map((sample) => sample.status), ['ok', 'budget', 'budget']);
+	assert.ok(lines.includes('Graders spent 0.4 $.'), lines.join('\n'));
 });
 
 test('samples 1 and merge majority keep the cache key of a grader without them', async () => {

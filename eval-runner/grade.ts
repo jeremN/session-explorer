@@ -19,7 +19,7 @@ import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
 import { loadSpec } from './spec.ts';
 import type { CommandGrader, Config, Grader, GraderMerge, PatternGrader, Spec } from './spec.ts';
-import { gradeStats } from './stats.ts';
+import { gradeStats, median } from './stats.ts';
 import type { Finding, Grade, GradeSample, RunRecord } from './stats.ts';
 import { rebuildRun, removeWorkspace } from './workspace.ts';
 
@@ -173,7 +173,14 @@ function gradeKey(target: GradeTarget, grader: CommandGrader, diff: string, conf
 }
 
 // The cost of the command grades in one pass of grade.ts, and its cap. The samples of a grade add to it one by one.
-type Budget = { spent: number; cap?: number };
+// `costs` holds the cost of every sample of the pass, all graders together.
+type Budget = { spent: number; cap?: number; costs: number[] };
+
+// A grade or a sample starts when the spent cost is under the cap and the estimate still fits. The estimate is the median
+// cost of the samples that ran in this pass, and 0 before the first one. So the first one always starts under the cap.
+function fits({ spent, cap, costs }: Budget): boolean {
+	return cap === undefined || (spent < cap && spent + (costs.length ? median(costs) : 0) <= cap);
+}
 // What one sample of the command gave. `log` is its stdout and its stderr.
 type SampleResult = { status: 'ok' | 'error' | 'timeout'; findings: Finding[]; costUsd?: number; durationMs: number; note?: string; log: string };
 
@@ -223,7 +230,7 @@ function mergeSamples(results: SampleResult[], samples: number, merge: GraderMer
 }
 
 // The samples of a grade share one clone and one grade id. EVAL_SAMPLE tells them apart. The budget stops the samples
-// one by one: a sample does not start once the spent cost reaches the cap.
+// one by one: a sample does not start when its estimate does not fit the cap.
 async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader, run: RunRecord, patch: string, id: string, budget: Budget): Promise<Grade> {
 	const config = target.spec.configs.find((entry) => entry.name === run.config) ?? { name: run.config };
 	const samples = grader.samples ?? 1;
@@ -240,10 +247,11 @@ async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader
 		const env = { EVAL_GRADE_ID: id, EVAL_BASE: target.baseSha, EVAL_DIFF: diff, EVAL_SPEC_DIR: target.spec.dir, ...(grader.blind ? {} : { EVAL_CONFIG: run.config, EVAL_RUN_ID: run.id }) };
 		const results: SampleResult[] = [];
 		for (let sample = 0; sample < samples; sample++) {
-			if (sample > 0 && budget.cap !== undefined && budget.spent >= budget.cap) break;
+			if (sample > 0 && !fits(budget)) break;
 			const result = await runSample(exec, grader, clone, { ...env, EVAL_SAMPLE: String(sample) });
 			// A grader that prints no cost costs nothing toward the budget.
 			budget.spent += result.costUsd ?? 0;
+			budget.costs.push(result.costUsd ?? 0);
 			results.push(result);
 		}
 		const runDir = join(target.evalDir, 'runs', run.id);
@@ -273,7 +281,7 @@ function describe(grade: Grade) {
 export async function gradeRuns(target: GradeTarget, { exec = realExec, graders: only, runs: onlyRuns, force = false }: GradeOptions = {}): Promise<{ errors: number; spentUsd: number }> {
 	const graders = (target.spec.graders ?? []).filter((grader) => !only || only.includes(grader.name));
 	const cacheDir = join(dirname(target.evalDir), 'cache', 'grades');
-	const budget: Budget = { spent: 0, cap: target.spec.budget?.gradersUsd };
+	const budget: Budget = { spent: 0, cap: target.spec.budget?.gradersUsd, costs: [] };
 	const todo: { run: RunRecord; patch: string; diff: string }[] = [];
 	for (const run of target.runs.filter((entry) => !onlyRuns || onlyRuns.includes(entry.id))) {
 		const patch = patchOf(target.evalDir, run);
@@ -297,7 +305,7 @@ export async function gradeRuns(target: GradeTarget, { exec = realExec, graders:
 				// A grade cached by an older version has no flagged.
 				const cached = (JSON.parse(readFileSync(file, 'utf8')) as { grade: Grade }).grade;
 				grade = { ...cached, flagged: cached.flagged ?? cached.findings.length > 0, cached: true };
-			} else if (budget.cap !== undefined && budget.spent >= budget.cap) grade = { status: 'budget', id, findings: [], note: 'the graders budget is spent' };
+			} else if (!fits(budget)) grade = { status: 'budget', id, findings: [], note: 'the graders budget is spent' };
 			else {
 				grade = await runCommand(exec, target, grader, run, patch, id, budget);
 				// A grade with a sample that the budget stopped stays out of the cache: the next pass runs all its samples.

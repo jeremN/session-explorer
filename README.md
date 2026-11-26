@@ -235,7 +235,7 @@ The command prints one JSON object on stdout: `{ "findings": [{ "severity": "...
 
 **Pattern grader.** No clone and no process. The runner reads the added lines of `diff.patch`. Each `rules` entry gives one finding per added line that its `pattern` matches, in a file that its `paths` matches (default: every file). The finding names the file, the line number in the new file and the trimmed line, 200 characters at most. Each `require` entry gives one finding when no changed file matches its `paths`. A deleted file does not count.
 
-**Budget.** `budget.gradersUsd` caps the cost of the command graders in one pass. The cost of a grade is the `costUsd` that its command prints, 0 when it prints none. When the sum of the costs reaches the cap, the remaining command grades get the status `budget`. The runner checks the cap before each sample: a sample does not start after the cap is reached. Its summary gets the status `budget`, and the grade merges the samples that ran. A grade with no sample run gets the status `budget`. Pattern graders cost nothing.
+**Budget.** `budget.gradersUsd` caps the cost of the command graders in one pass. The cost of a grade is the `costUsd` that its command prints, 0 when it prints none. The runner checks the cap before each grade and before each sample. It starts one only when the spent cost plus an estimate stays within the cap. The estimate is the median cost of the samples that already ran in the pass, all graders together. It is 0 before the first sample, so the first sample starts when the cap is not reached. A grade that does not start gets the status `budget`. A sample that does not start gets the status `budget` in the summary, and the grade merges the samples that ran. Pattern graders cost nothing.
 
 **Cache.** An `ok` command grade goes to `eval-runner/out/cache/grades/`, except a grade with a sample that the budget stopped. A later pass reuses the whole grade when the diff, the grader, the base commit and the spec folder are the same (and the config, for a grader that is not blind). `samples` and `merge` are part of the grader, but with one sample they do not count: the grade of a grader without them stays valid. A reused grade has `cached: true` and costs nothing. The script of the command does not count: after you change it, pass `--force`.
 
@@ -506,7 +506,7 @@ A campaign does not use the run cache. A reused run would break the order and th
 - A run starts only when `spent + reserved + estimate` stays within `budget.usd`. The reservation makes parallel runs safe: they cannot pass the budget together.
 - At the first run that does not fit, the campaign stops all new runs. In `campaign.json` these runs have the status `budget`. In `eval.json` they have the status `skipped` and a note, and they do not count in `n`.
 - A run with no CLI cost (a crash, a timeout) adds its `perRunUsd` to the spend.
-- `budget.gradersUsd` is shared. The specs grade one after the other with what is left. Without it, each spec keeps its own `budget.gradersUsd`.
+- `budget.gradersUsd` is shared. The specs grade one after the other with what is left. Each spec applies the same estimate rule to what is left. Without it, each spec keeps its own `budget.gradersUsd`.
 - `perEvalUsd` of a spec does not apply in a campaign. `perRunUsd` still caps each run.
 
 #### Retries
