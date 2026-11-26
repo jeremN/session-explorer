@@ -1,7 +1,7 @@
 // Behavior of one session: the sequence of its tool calls as steps, and the counts derived from it.
 // The rows of a session and of its subagents count together. A transcript can hold the same tool_use block twice
 // (streaming): a call counts once, by its id.
-import { FAILURE, OUTAGE, commandClasses, isVerifyClass, resultText } from '../context-tracer/tracer.ts';
+import { OUTAGE, TEST_FAILURE, commandClasses, isVerifyClass, resultText } from '../context-tracer/tracer.ts';
 import type { CommandClass } from '../context-tracer/tracer.ts';
 
 export type StepClass = CommandClass | 'test-failed';
@@ -37,7 +37,7 @@ function classesOf(use: Use, result: Result | undefined): StepClass[] {
 	if (EDIT_TOOLS.has(use.name)) return ['edit'];
 	if (use.name !== 'Bash') return ['other'];
 	const classes: StepClass[] = commandClasses(text(use.input.command));
-	if (classes.includes('test') && result && (result.error || FAILURE.test(result.output))) classes.push('test-failed');
+	if (classes.includes('test') && result && (result.error || TEST_FAILURE.test(result.output))) classes.push('test-failed');
 	return classes;
 }
 

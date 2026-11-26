@@ -212,7 +212,9 @@ export function commandClasses(command: string): CommandClass[] {
 // A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.
 // The auto mode classifier had no answer, so the call never ran. Its result is not an outcome of the command.
 export const OUTAGE = /^The server-side auto mode classifier gave no verdict/;
-export const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
+// TEST_FAILURE: the lines of a test runner only. A lint or type error is a failure of the check, not of a test.
+export const TEST_FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]/;
+export const FAILURE = new RegExp(`${TEST_FAILURE.source}|\\b[1-9]\\d*\\s+errors?\\b|\\berror TS\\d{4}\\b`);
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 export const resultText = (content: unknown) =>

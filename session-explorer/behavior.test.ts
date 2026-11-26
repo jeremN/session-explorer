@@ -70,6 +70,11 @@ test('a test fails on is_error or on a failure line, and a pass after a failure 
 	assert.equal(metrics.toolErrors, 1);
 });
 
+test('a lint or type error in the output of a test call is not a test failure', () => {
+	const { metrics } = behaviorOf(rows([bash('a', 'pnpm lint && pnpm test | tail', '✖ 2 problems (2 errors, 0 warnings)\nTests  3 passed'), bash('b', 'pnpm test && pnpm check:types | tail', 'error TS2304: x')]));
+	assert.deepEqual([metrics.testRuns, metrics.testFailures], [2, 0]);
+});
+
 test('lintOnlyAtEnd: 1 when every lint comes after the last edit, 0 when a lint precedes an edit, absent without lint', () => {
 	const end = behaviorOf(rows([call('a', 'Edit', { file_path: '/r/a.ts' }), bash('b', 'pnpm exec eslint src'), bash('c', 'pnpm lint')])).metrics;
 	assert.equal(end.lintOnlyAtEnd, 1);
