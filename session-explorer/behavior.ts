@@ -1,7 +1,7 @@
 // Behavior of one session: the sequence of its tool calls as steps, and the counts derived from it.
 // The rows of a session and of its subagents count together. A transcript can hold the same tool_use block twice
 // (streaming): a call counts once, by its id.
-import { OUTAGE, TEST_FAILURE, commandClasses, isVerifyClass, resultText } from '../context-tracer/tracer.ts';
+import { OUTAGE, TEST_FAILURE, commandClasses, resultText, verifyCommands } from '../context-tracer/tracer.ts';
 import type { CommandClass } from '../context-tracer/tracer.ts';
 
 export type StepClass = CommandClass | 'test-failed';
@@ -93,11 +93,10 @@ export function behaviorOf(entries: unknown[]): { steps: Step[]; metrics: Behavi
 			if (read.has(path)) rereads++;
 			read.add(path);
 		}
-		if (classes.some(isVerifyClass)) {
-			const command = text(use.input.command).replace(/\s+/g, ' ').trim();
-			if (checked.has(command)) reruns++;
-			checked.add(command);
-		}
+		// A rerun runs only checks that ran since the last edit. A pipe filter or a redirection does not make a new check.
+		const checks = use.name === 'Bash' ? verifyCommands(text(use.input.command)) : [];
+		if (checks.length && checks.every((check) => checked.has(check))) reruns++;
+		for (const check of checks) checked.add(check);
 		if (classes.includes('test')) {
 			if (classes.includes('test-failed')) red = true;
 			else if (red) {

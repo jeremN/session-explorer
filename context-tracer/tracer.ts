@@ -124,7 +124,7 @@ function segmentsOf(command: string): Segment[] {
 }
 
 // Words before the command itself: a subshell, a loop body, a variable, a time limit.
-const COMMAND_PREFIX = /^(?:[({!]\s*|(?:do|then|else|time|env|nohup|exec)\s+|\w+=\S*\s+|timeout\s+(?:-\S+\s+)*\d\S*\s+)/;
+const COMMAND_PREFIX = /^(?:[({!]\s*|(?:do|then|else|time|env|nohup|exec)\s+|\w+=\$\(\s*|\w+=\S*\s+|timeout\s+(?:-\S+\s+)*\d\S*\s+)/;
 const QUOTED = /'[^']*'|"(?:\\.|[^"\\])*"/g;
 const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx']);
 const VALUE_FLAGS = new Set(['--dir', '-C', '--filter', '-F', '--prefix', '--workspace', '--cwd', '--config']);
@@ -186,7 +186,7 @@ function writesSource(bare: string) {
 	});
 }
 
-function segmentClasses({ text: raw, piped }: Segment): CommandClass[] {
+function segmentClasses({ text: raw, piped }: Segment): { text: string; classes: CommandClass[] } {
 	let text = raw;
 	for (let previous = ''; previous !== text; ) {
 		previous = text;
@@ -199,14 +199,26 @@ function segmentClasses({ text: raw, piped }: Segment): CommandClass[] {
 	const name = head.replace(/^.*\//, '');
 	classes.push(...(RUNNERS.has(name) ? runnerClasses(name, rest) : binaryClasses(name, rest)));
 	if (name === 'git') classes.push('git');
-	if (SHELL_IN_PLACE.test(bare) || writesSource(bare)) classes.push('edit');
+	if ((SHELL_IN_PLACE.test(bare) && !knowledge.shellNotARepository.test(bare)) || writesSource(bare)) classes.push('edit');
 	else if (!piped && (EXPLORERS.has(name) || (name === 'sed' && rest.includes('-n')))) classes.push('explore');
-	return classes;
+	return { text, classes };
 }
 
+// The body of a heredoc is text, not commands. The rest of its first line stays: `cat <<'EOF' > a.ts` writes a.ts.
+const classifiedSegments = (command: string) =>
+	segmentsOf(command.replace(HEREDOC, (heredoc) => heredoc.split('\n')[0].replace(/^<<-?\s*["']?\w+["']?/, ''))).map(segmentClasses);
+
 export function commandClasses(command: string): CommandClass[] {
-	const classes = new Set(segmentsOf(command.replace(HEREDOC, '')).flatMap(segmentClasses));
+	const classes = new Set(classifiedSegments(command).flatMap((segment) => segment.classes));
 	return classes.size ? [...classes] : ['other'];
+}
+
+// The test, types, lint and build segments of a command, without their redirections and with their spaces folded.
+// `pnpm test | tail -5` and `pnpm test 2>&1 | grep FAIL` give the same check: `pnpm test`.
+export function verifyCommands(command: string): string[] {
+	return classifiedSegments(command)
+		.filter((segment) => segment.classes.some(isVerifyClass))
+		.map((segment) => segment.text.replace(/\s*\d*>>?&?\s*\S+/g, '').replace(/\s+/g, ' ').trim());
 }
 
 // A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.

@@ -118,6 +118,8 @@ test('reruns: a verify command repeated with no edit in between', () => {
 	);
 	assert.equal(metrics.reruns, 1);
 	assert.equal(metrics.typeChecks, 2);
+	// Another pipe filter or redirection gives the same check.
+	assert.equal(behaviorOf(rows([bash('a', 'pnpm test | tail -5'), bash('b', 'pnpm test 2>&1 | grep FAIL'), bash('c', 'pnpm test && pnpm lint')])).metrics.reruns, 1);
 });
 
 test('firstContextTokens: the input of the first main request, cache read and cache creation included', () => {

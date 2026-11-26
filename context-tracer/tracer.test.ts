@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { classify, commandClasses, configureKnowledge, summarize, traceSession, traceTasks } from './tracer.ts';
+import { classify, commandClasses, configureKnowledge, summarize, traceSession, traceTasks, verifyCommands } from './tracer.ts';
 
 const CONFIG = {
 	brain: {
@@ -334,6 +334,18 @@ test('commandClasses: in-place edits and writes to a source file are edits; a lo
 	assert.deepEqual(commandClasses('pnpm lint > /tmp/lint.log 2>&1'), ['lint']);
 	assert.deepEqual(commandClasses('pnpm test 2>/dev/null'), ['test']);
 	assert.deepEqual(commandClasses('pnpm test > out.txt'), ['test']);
+});
+
+test('commandClasses: a heredoc redirect writes, a command substitution runs, and an in-place edit of a plan file is no edit', () => {
+	assert.deepEqual(commandClasses("cat <<'EOF' > src/a.ts\nconst a = 1;\nEOF\npnpm test"), ['edit', 'test']);
+	assert.deepEqual(commandClasses('OUT=$(pnpm test 2>&1); echo "$OUT" | tail'), ['test']);
+	assert.deepEqual(commandClasses("sed -i '' 's/a/b/' ~/.claude/handoffs/x/PLAN.md"), ['other']);
+});
+
+test('verifyCommands: the check segments without their pipes and redirections', () => {
+	assert.deepEqual(verifyCommands('cd web && pnpm  test 2>&1 | tail -5'), ['pnpm test']);
+	assert.deepEqual(verifyCommands('pnpm lint > /tmp/lint.log; pnpm check:types | grep error'), ['pnpm lint', 'pnpm check:types']);
+	assert.deepEqual(verifyCommands('git status && ls'), []);
 });
 
 test('commandClasses: extra patterns from the config add to the defaults', () => {

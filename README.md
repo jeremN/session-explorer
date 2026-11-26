@@ -138,7 +138,7 @@ A grade goes to `eval-runner/out/cache/grades/`. See [Grade the diffs](#grade-th
 
 The pass rate tells you whether a configuration works. The behavior metrics tell you how many turns it took, and why. Each run gets them in `metrics`, and the "Comparaison" panel shows their medians per configuration. The "Runs" panel shows the steps of each run as a band of colored cells, one cell per tool call. The session index (`out/index.json`) has the same counts in the `behavior` field of each session.
 
-**Command classes.** The tool cuts each Bash command into segments at `&&`, `||`, `;`, `|`, `&` and new lines, outside quotes. It removes the body of a heredoc first. Each segment gets classes from its first word, after `cd`, `(`, `do`, `VAR=value` and `timeout N`. A command counts in every class of its segments.
+**Command classes.** The tool cuts each Bash command into segments at `&&`, `||`, `;`, `|`, `&` and new lines, outside quotes. It removes the body of a heredoc first, and keeps the rest of its first line (`cat <<'EOF' > a.ts` writes `a.ts`). Each segment gets classes from its first word, after `(`, `do`, `VAR=value`, `VAR=$(` and `timeout N`. A `cd` is a segment of its own, with no class. A command counts in every class of its segments.
 
 | Class | Default patterns |
 |---|---|
@@ -146,7 +146,7 @@ The pass rate tells you whether a configuration works. The behavior metrics tell
 | `types` | A script whose name has `typecheck`, `type-check`, `types` or `tsc`, such as `check:types`. A script named `check`. `tsc`, `vue-tsc`, `svelte-check`, `mypy`, `pyright`, `cargo check`. |
 | `lint` | A script whose name has `lint` or `prettier`, or starts with `format`. `eslint`, `prettier`, `biome`, `ruff`, `oxlint`, `cargo clippy`, `go vet`. |
 | `build` | A script whose name starts with `build`. `cargo build`, `go build`. |
-| `edit` | `sed -i`, `perl -i`, or a write (`>`, `>>`, `tee`) to a source file (`.ts`, `.js`, `.svelte`, `.json`, `.md` and others). A write under `/tmp` or `/dev` is not an edit. |
+| `edit` | `sed -i`, `perl -i`, or a write (`>`, `>>`, `tee`) to a source file (`.ts`, `.js`, `.svelte`, `.json`, `.md` and others). A write under `/tmp` or `/dev`, or under `~/.claude/`, is not an edit. |
 | `install` | `install`, `i`, `ci`, `add`, `remove`, `update` of a package manager, `yarn` alone, `pip install`. |
 | `git` | `git`, with any option. |
 | `explore` | `cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `ls`, `find`, `wc`. A segment after a pipe (`\| tail`) filters the output of the command before it, so it does not explore. |
@@ -168,7 +168,7 @@ To add a pattern, set `commands` in the spec or in the configuration file. Each 
 | `typeChecks`, `lintRuns` | The steps with the class `types`, or `lint`. |
 | `lintOnlyAtEnd` | 1 when every lint step comes after the last edit step, or is that step. 0 when a lint step comes before an edit step. Absent when no step lints. The view shows the runs with 1 out of the runs that lint. |
 | `rereads` | A `Read` of a file that the run read before, with no `Edit` or `Write` of that file between the two. A shell edit counts as an edit of every file. |
-| `reruns` | A test, types, lint or build command that the run ran before, with no edit between the two. The commands compare with their spaces folded. |
+| `reruns` | A step whose test, types, lint and build segments all ran before, with no edit since. A segment compares without its redirections and with its spaces folded, so `pnpm test \| tail -5` and `pnpm test 2>&1 \| grep FAIL` run the same check. |
 | `toolErrors` | The steps whose result is an error. |
 | `firstContextTokens` | The input tokens of the first request of the main agent: fresh input, cache read and cache creation. |
 
