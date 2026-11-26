@@ -51,7 +51,7 @@ test('a reservation per running job keeps parallel jobs under the budget', async
 test('once a job stops on the budget, no later job starts', async () => {
 	const p = probe();
 	const jobs = [fake('a', p, [{ costUsd: 2 }]), fake('b', p, [{ costUsd: 2 }]), fake('cheap', p, [{ costUsd: 0.1 }], { estimate: 0.1 })];
-	const records = await schedule(jobs, { ...base, budgetUsd: 3 });
+	const records = await schedule(jobs, { ...base, budgetUsd: 2.5 });
 	assert.deepEqual(records.map((record) => record.status), ['done', 'budget', 'budget']);
 	assert.deepEqual(p.started, ['a']);
 });
