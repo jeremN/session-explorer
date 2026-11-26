@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { metricCell, passPill, renderEval, renderEvalOptions, renderRuns, renderWatch, testShares } from '../session-explorer/viewer/evals.mjs';
+import { editsPaths, metricCell, passPill, renderEval, renderEvalOptions, renderRuns, renderWatch, testShares } from '../session-explorer/viewer/evals.mjs';
 
 const spread = (values: number[]) => {
 	const sorted = [...values].sort((a, b) => a - b);
@@ -187,5 +187,20 @@ test('the comparison shows the medians of the behavior metrics and the runs that
 	assert.match(cells('Lint seulement à la fin')[2], />3\/3</);
 	// An eval without the behavior metrics has none of these rows.
 	assert.doesNotMatch(renderEval(sample()), /Appels d’outils|Lint seulement/);
+});
+
+test('a config with edits shows the diff it measured in a collapsible block, escaped', () => {
+	const data = sample();
+	(data.configs[1] as Record<string, unknown>).editsPatch = 'configs/terse/1a2b3c4/edits.patch';
+	const html = renderEval(data, { terse: 'diff --git a/AGENTS.md b/AGENTS.md\n-<b>old</b>\n+new\n' });
+	const block = html.split('<details class="ev-edits"')[1].split('</details>')[0];
+	assert.match(block, /<summary>terse · configs\/terse\/1a2b3c4\/edits\.patch<\/summary>/);
+	assert.match(block, /<pre class="ev-patch">diff --git a\/AGENTS\.md b\/AGENTS\.md\n<del>-&lt;b&gt;old&lt;\/b&gt;<\/del>\n<ins>\+new<\/ins>\n<\/pre>/);
+	assert.equal(html.match(/<details class="ev-edits"/g)?.length, 1);
+	// A patch the viewer could not read says so.
+	assert.match(renderEval(data), /<pre class="ev-patch">diff illisible : configs\/terse\/1a2b3c4\/edits\.patch<\/pre>/);
+	// An eval without edits has no such panel.
+	assert.doesNotMatch(renderEval(sample()), /ev-edits|Variantes/);
+	assert.deepEqual(editsPaths(data), { terse: 'configs/terse/1a2b3c4/edits.patch' });
 });
 

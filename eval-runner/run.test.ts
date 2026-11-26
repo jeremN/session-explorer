@@ -490,3 +490,44 @@ test('the graders of the spec grade every run after the eval, the run cache hold
 	assert.equal(none.configs[0].grades, undefined);
 	assert.doesNotMatch(plain.stdout, /rules ok/);
 });
+
+test('a config with edits runs on the edited files and keeps edits.patch; a failing edit ends its runs before the agent and spends nothing', async () => {
+	const out = join(root, 'out-edits');
+	const configs = (rule: Record<string, unknown>) => [
+		{ name: 'broken', edits: [{ file: 'a.txt', replace: 'nowhere', with: '' }] },
+		{ name: 'edited', edits: [{ file: 'a.txt', with: 'uno', ...rule }] }
+	];
+	// One run fits the eval budget: an edit error that reserved its cap would skip the edited run.
+	const spec = (rule: Record<string, unknown>) => writeSpec('edits', { runs: 1, budget: { perRunUsd: 1, perEvalUsd: 1 }, configs: configs(rule) });
+	const dry = await cli([spec({ replace: '^one$', flags: 'm' }), '--dry-run', '--out', out]);
+	assert.equal(dry.code, 0, dry.stderr);
+	assert.match(dry.stdout, /^broken edits: edits\[0\] a\.txt: the pattern matches 0 times, expected 1$/m);
+	assert.match(dry.stdout, /^edited edits: a\.txt$/m);
+	assert.equal(existsSync(out), false);
+
+	const result = await cli([spec({ replace: '^one$', flags: 'm' }), '--claude', FAKE, '--out', out, '--keep']);
+	assert.equal(result.code, 1);
+	const dir = evalDir(out);
+	const saved = JSON.parse(readFileSync(join(dir, 'eval.json'), 'utf8'));
+	const [broken, edited] = saved.runs;
+	assert.deepEqual([broken.id, broken.status, broken.note], ['broken-1', 'error', 'edits[0] a.txt: the pattern matches 0 times, expected 1']);
+	assert.equal(existsSync(join(dir, 'runs', 'broken-1', 'claude.json')), false);
+	assert.deepEqual(clones(), ['edited-1']);
+	assert.equal(edited.status, 'ok');
+	// Only the edited run spent its cost.
+	assert.equal(saved.spent, edited.cliCostUsd);
+	assert.equal(readFileSync(join(tmp, 'eval-runner', readdirSync(join(tmp, 'eval-runner'))[0], 'edited-1', 'a.txt'), 'utf8'), 'uno\n');
+	rmSync(join(tmp, 'eval-runner'), { recursive: true, force: true });
+	assert.equal(saved.configs[0].editsPatch, undefined);
+	assert.equal(saved.configs[1].editsPatch, `configs/edited/${saved.baseSha.slice(0, 7)}/edits.patch`);
+	assert.match(readFileSync(join(dir, saved.configs[1].editsPatch), 'utf8'), /^diff --git a\/a\.txt b\/a\.txt\n[^]*\n-one\n\+uno\n$/);
+	assert.deepEqual(saved.spec.configs[1].edits, [{ file: 'a.txt', replace: '^one$', with: 'uno', flags: 'm' }]);
+
+	// Another rule that gives the same text reuses the run.
+	await new Promise((wake) => setTimeout(wake, 1100));
+	const again = await cli([spec({ replace: 'one' }), '--claude', FAKE, '--out', out]);
+	assert.equal(again.code, 1);
+	const latest = JSON.parse(readFileSync(join(out, readdirSync(out).filter((name) => name !== 'index.json' && name !== 'cache').sort().at(-1)!, 'eval.json'), 'utf8'));
+	assert.deepEqual(latest.runs.map((run: { id: string; cached?: unknown }) => [run.id, Boolean(run.cached)]), [['edited-1', true], ['broken-1', false]]);
+	assert.ok(existsSync(join(out, latest.id, latest.configs[1].editsPatch)));
+});

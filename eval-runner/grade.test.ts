@@ -98,7 +98,7 @@ if (mode === 'bad') { console.log('not json'); process.exit(0); }
 if (mode === 'fail' || (mode === 'fail-second' && sample === '1')) { console.error('boom'); process.exit(3); }
 if (mode === 'slow') await new Promise((wake) => setTimeout(wake, 5000));
 const id = process.env.EVAL_GRADE_ID;
-writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '-' + sample + '.json'), JSON.stringify({ id, sample, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), env: process.env }));
+writeFileSync(join(process.env.EVAL_SPEC_DIR, 'seen-' + id + '-' + sample + '.json'), JSON.stringify({ id, sample, base: process.env.EVAL_BASE, diff: process.env.EVAL_DIFF, diffText: readFileSync(process.env.EVAL_DIFF, 'utf8'), specDir: process.env.EVAL_SPEC_DIR, cwd: process.cwd(), answer: readFileSync('answer.txt', 'utf8'), harness: existsSync('HARNESS.md'), rules: readFileSync('rules.md', 'utf8'), env: process.env }));
 const findings = mode === 'first' && sample !== '0' ? [] : [{ severity: 'minor', summary: 'answer is hard-coded', file: 'answer.txt', line: 1, extra: 'dropped' }];
 console.log(JSON.stringify({ findings, costUsd: 0.4 }));
 `;
@@ -110,6 +110,7 @@ async function fixture(name: string, graders: unknown[], budget: Record<string, 
 	mkdirSync(repo, { recursive: true });
 	await git(repo, 'init', '-q', '-b', 'main');
 	writeFileSync(join(repo, 'answer.txt'), '0\n');
+	writeFileSync(join(repo, 'rules.md'), 'base rules\n');
 	await git(repo, 'add', '-A');
 	await git(repo, 'commit', '-q', '-m', 'base');
 	const base = await git(repo, 'rev-parse', 'HEAD');
@@ -131,8 +132,8 @@ async function fixture(name: string, graders: unknown[], budget: Record<string, 
 		if (run.id in patches) writeFileSync(join(evalDir, 'runs', run.id, 'diff.patch'), patches[run.id]);
 	}
 	const task = { repo, base: 'HEAD', prompt: 'Make it 42.', timeoutSec: 60, acceptance: { command: 'true', timeoutSec: 30 } };
-	// zebra-config writes a harness file: a blind grader must not see it.
-	const configs = [{ name: 'zebra-config', files: { 'HARNESS.md': { text: 'zebra rules\n' } } }, { name: 'yak-config' }];
+	// zebra-config writes a harness file and edits a file of the base: a blind grader must see neither.
+	const configs = [{ name: 'zebra-config', files: { 'HARNESS.md': { text: 'zebra rules\n' } }, edits: [{ file: 'rules.md', append: 'zebra edit\n' }] }, { name: 'yak-config' }];
 	const ev = {
 		schema: 'eval-runner/v1',
 		id: 'e1',
@@ -194,8 +195,9 @@ test('a command grader runs blind in a new clone of the change, and its findings
 		assert.equal(view.specDir, specDir);
 		assert.equal(view.answer, runId === 'zebra-config-1' ? '42\n' : '43\n');
 		assert.equal(view.diffText, patches[runId]);
-		// The clone holds the base, not the harness files of the config.
+		// The clone holds the base, not the harness files or the edits of the config.
 		assert.equal(view.harness, false);
+		assert.equal(view.rules, 'base rules\n');
 		// The copy of the patch is named by the grade id.
 		assert.ok(view.diff.endsWith(`${view.id}.patch`));
 		// Blind: no config name and no run id in the cwd, the patch path or the environment. Both are gone after the grade.
@@ -277,6 +279,9 @@ test('a non-blind grader gets the config and the run id; --spec must name the sa
 	const [view] = seen(specDir);
 	assert.equal(view.env.EVAL_CONFIG, 'zebra-config');
 	assert.equal(view.env.EVAL_RUN_ID, 'zebra-config-1');
+	// A non-blind grader gets the clone of the run: the files and the edits of its config.
+	assert.equal(view.harness, true);
+	assert.equal(view.rules, 'base rules\nzebra edit\n');
 
 	const other = join(specDir, 'other.json');
 	writeFileSync(other, JSON.stringify({ name: 'x', task: { ...task, prompt: 'Something else.' }, budget: { perRunUsd: 1, perEvalUsd: 1 }, configs: [{ name: 'a' }], graders: [{ name: 'rules', kind: 'pattern', rules: [{ name: 'magic', pattern: '42', severity: 'minor' }] }] }));

@@ -23,7 +23,9 @@ const MIME: Record<string, string> = {
 	'.css': 'text/css; charset=utf-8',
 	'.js': 'text/javascript; charset=utf-8',
 	'.mjs': 'text/javascript; charset=utf-8',
-	'.json': 'application/json; charset=utf-8'
+	'.json': 'application/json; charset=utf-8',
+	// The edits.patch of a config with edits (eval-runner/edits.ts).
+	'.patch': 'text/plain; charset=utf-8'
 };
 
 export function priceEvents(events: SessionEvent[], rates: Record<string, Rate> = RATES): SessionEvent[] {

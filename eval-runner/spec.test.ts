@@ -206,6 +206,55 @@ test('files maps relative paths inside the clone to a text or a file, for any ag
 	for (const path of ['/etc/x', '../up', 'a/../b', '.git/config', 'a//b', '.']) failure(withConfig({ files: { [path]: { text: 'x' } } }), 'configs[0].files');
 });
 
+test('edits takes each kind with its own fields, for any agent', () => {
+	const withEdits = (edits: unknown, extra: Record<string, unknown> = {}) => ({ ...base(), configs: [{ name: 'a', ...extra, edits }] });
+	const edits = [
+		{ file: 'AGENTS.md', replace: '^Frequent commands: (.*)$', with: 'Run: $1', flags: 'm', count: 1 },
+		{ file: 'AGENTS.md', replace: 'x', with: '' },
+		{ file: 'AGENTS.md', moveSection: 'Code Review Rules', after: '/^## Cross/', pointer: 'See below.' },
+		{ file: 'AGENTS.md', moveSection: 'Mission', before: 'Scope' },
+		{ file: 'apps/bff/AGENTS.md', removeSection: '### Creating GitLab merge requests' },
+		{ file: 'AGENTS.md', append: '\nLast.\n' },
+		{ file: 'NEW.md', prepend: 'First.\n', create: true }
+	];
+	assert.deepEqual(validateSpec(withEdits(edits, { agent: 'codex' }), '/specs/demo').configs[0].edits, edits);
+	assert.equal(validateSpec(base(), '/specs/demo').configs[0].edits, undefined);
+});
+
+test('edits refuses an unknown field, a path outside the clone, a bad regex, and a move with both after and before', () => {
+	const withEdits = (...edits: unknown[]) => ({ ...base(), configs: [{ name: 'a', edits }] });
+	const rejects = (raw: unknown, message: RegExp) =>
+		assert.throws(
+			() => validateSpec(raw, '/specs/demo'),
+			(error: unknown) => error instanceof SpecError && message.test(error.message)
+		);
+	rejects({ ...base(), configs: [{ name: 'a', edits: [] }] }, /^spec\.configs\[0\]\.edits: required non-empty array$/);
+	rejects(withEdits({ file: 'AGENTS.md' }), /^spec\.configs\[0\]\.edits\[0\]: set exactly one of replace, moveSection, removeSection, append, prepend$/);
+	rejects(withEdits({ file: 'AGENTS.md', append: 'x', prepend: 'y' }), /edits\[0\]: set exactly one of/);
+	rejects(withEdits({ file: 'AGENTS.md', append: 'x', pointer: 'p' }), /^spec\.configs\[0\]\.edits\[0\]\.pointer: unknown field$/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: 'x', with: 'y', create: true }), /edits\[0\]\.create: unknown field/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: 'x' }), /edits\[0\]\.with: required string/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: '(', with: '' }), /edits\[0\]\.replace: \( is not a valid regular expression/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: 'x', with: '', flags: 'g' }), /edits\[0\]\.flags: a combination of m, s and i/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: 'x', with: '', flags: 'mm' }), /edits\[0\]\.flags: a combination of m, s and i/);
+	rejects(withEdits({ file: 'AGENTS.md', replace: 'x', with: '', count: 0 }), /edits\[0\]\.count: required integer/);
+	rejects(withEdits({ file: 'AGENTS.md', moveSection: 'A', after: 'B', before: 'C' }), /^spec\.configs\[0\]\.edits\[0\]: set exactly one of after and before$/);
+	rejects(withEdits({ file: 'AGENTS.md', moveSection: 'A' }), /edits\[0\]: set exactly one of after and before/);
+	rejects(withEdits({ file: 'AGENTS.md', removeSection: '/(/' }), /edits\[0\]\.removeSection: \/\(\/ is not a valid regular expression/);
+	rejects(withEdits({ file: 'AGENTS.md', append: 'x', create: 'yes' }), /edits\[0\]\.create: required boolean/);
+	rejects(withEdits('AGENTS.md'), /edits\[0\]: required object/);
+	for (const path of ['/etc/x', '../up', 'a/../b', '.git/config', 'a//b', '.']) rejects(withEdits({ file: path, append: 'x' }), /edits\[0\]\.file: .* must be a relative path inside the clone, outside \.git/);
+});
+
+test('an edit of a file that claudeMd, userClaudeMd or a skill writes after the edits is refused', () => {
+	const config = (extra: Record<string, unknown>) => ({ ...base(), configs: [{ name: 'a', ...extra }] });
+	failure(config({ claudeMd: { text: 'x' }, edits: [{ file: 'CLAUDE.md', append: 'y' }] }), 'configs[0].edits[0].file');
+	failure(config({ agent: 'codex', claudeMd: { text: 'x' }, edits: [{ file: 'AGENTS.md', append: 'y' }] }), 'configs[0].edits[0].file');
+	failure(config({ userClaudeMd: { text: 'x' }, edits: [{ file: 'CLAUDE.local.md', append: 'y' }] }), 'configs[0].edits[0].file');
+	failure(config({ skills: ['skills/tidy'], edits: [{ file: '.claude/skills/tidy/SKILL.md', append: 'y' }] }), 'configs[0].edits[0].file');
+	assert.equal(validateSpec(config({ claudeMd: { text: 'x' }, edits: [{ file: 'AGENTS.md', append: 'y' }] }), '/s').configs[0].edits?.length, 1);
+});
+
 test('graders: a command grader gets its defaults, a pattern grader keeps its rules, and budget.gradersUsd is optional', () => {
 	const raw = {
 		...base(),

@@ -49,6 +49,7 @@ Merge requests created: 40 in 15 sessions. These sessions cost 350 dollars (35 %
 | `node eval-runner/run.ts <spec.json> [--dry-run]` | Run one task under several configurations (see [Eval runner](#eval-runner)) |
 | `node eval-runner/grade.ts <evalDir>` | Grade the diff of each run of an eval (see [Grade the diffs](#grade-the-diffs)) |
 | `node eval-runner/metrics.ts <evalDir>` | Compute the behavior metrics of an eval again (see [Behavior metrics](#behavior-metrics)) |
+| `node eval-runner/edits.ts <spec.json>` | Print the diff that the `edits` of each configuration give, with no agent (see [Edit an instruction file by pattern](#edit-an-instruction-file-by-pattern)) |
 | `node --test` | Run the test suite |
 
 All three scripts take `--days N` (default 30, 14 for the heartbeat) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
@@ -120,7 +121,7 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 
 ### Cache
 
-A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, spec folder (`EVAL_SPEC_DIR`), hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
+A finished run (`ok`, `timeout` or `budget`) goes to `eval-runner/out/cache/`. The next eval reuses it when the agent would get the same thing again: the same base commit, prompt, acceptance command, spec folder (`EVAL_SPEC_DIR`), hidden tests and time limit, the same config, and the same CLI version. The config name and the repository path do not count. A file of the config (`claudeMd.file`, `settings`, `mcpConfig`, `skills`, `plugins`) counts by its content, so a change to a skill or a CLAUDE.md runs again. The `edits` of a config count by the text they give at the base commit, not by their rules (see [Edit an instruction file by pattern](#edit-an-instruction-file-by-pattern)). A reused run costs nothing and has a `cached` field that names the eval that holds its files. The script that the acceptance command runs does not count: after you change it, pass `--no-cache`.
 
 A grade goes to `eval-runner/out/cache/grades/`. See [Grade the diffs](#grade-the-diffs).
 
@@ -296,6 +297,7 @@ A field that is absent keeps the CLI default.
 | `userClaudeMd` (`{ "text" }` or `{ "file" }`) | plays your `~/.claude/CLAUDE.md`. The runs read no user memory (`--setting-sources project,local`), so it becomes `CLAUDE.local.md` in the clone: Claude Code reads it with the `CLAUDE.md` of the project. Claude Code only |
 | `remove` (paths) | paths of the task repository deleted from the clone before the setup commit, for every agent: `["AGENTS.md", ".claude"]` measures a repository without the harness its team commits. A relative path inside the clone, outside `.git` |
 | `files` (path → `{ "text" }` or `{ "file" }`) | files written into the clone before the setup commit, for every agent: `{ "AGENTS.md": { "file": "AGENTS.lite.md" } }` measures a variant of a committed instruction file. The file keeps its path, so it does not mask the instruction files of other directories as a `claudeMd` would. Same path rule as `remove` |
+| `edits` (array) | pattern edits of the files of the clone, in order, after `remove` and `files` and before the setup commit, for every agent. One config serves every base commit. See [Edit an instruction file by pattern](#edit-an-instruction-file-by-pattern) |
 | `appendSystemPrompt` | `--append-system-prompt <value>` |
 | `settings` (object or file) | `<run>/settings.json`, passed as `--settings`. Put hooks here. |
 | `skills` (directories) | Copied to `.claude/skills/<name>/` in the clone, committed in the setup commit |
@@ -307,6 +309,41 @@ A field that is absent keeps the CLI default.
 | `sandbox` | Turns on the Bash sandbox of Claude Code. The runner merges `sandbox.enabled`, `failIfUnavailable: true`, `allowUnsandboxedCommands: false` and an empty `excludedCommands` into `<run>/settings.json`, over the `settings` of the config. Default false. |
 
 The runner always adds `-p` (prompt on stdin), `--output-format json`, `--session-id`, `--max-budget-usd`, `--permission-prompts none`, `--setting-sources project,local` and `--disallowedTools "Bash(git push:*)"`. The `--setting-sources` flag keeps your user hooks and plugins out of every configuration.
+
+### Edit an instruction file by pattern
+
+A `files` entry replaces a whole file. To measure a variant of an AGENTS.md on three base commits, you need three copies. An entry of `edits` changes the file of each base, so one config serves every base:
+
+```json
+{ "name": "verify2", "edits": [{ "file": "AGENTS.md", "replace": "^Frequent commands: .*$", "flags": "m", "with": "Verify in this order. …" }] }
+```
+
+Each edit names a `file`: a relative path inside the clone, outside `.git`, as for `files`. It has one of these kinds:
+
+| Kind | Fields | Effect |
+|---|---|---|
+| `replace` | `replace` (a JavaScript regular expression), `with`, `flags`, `count` | Replaces each match with `with`. `with` takes `$1` and `$&` as `String.replace` does; write `$$` for a `$`. `flags` is a combination of `m`, `s` and `i`. The pattern must match exactly `count` times (default 1). |
+| `removeSection` | `removeSection` (a heading), `pointer` | Deletes a Markdown section. With `pointer`, that line takes the place of the section. |
+| `moveSection` | `moveSection` (a heading), `after` or `before` (a heading), `pointer` | Moves a section to just after the `after` section (after its subsections) or to just before the `before` section. With `pointer`, that line stays at the old place. |
+| `append`, `prepend` | `append` or `prepend` (a text), `create` | Adds the text at the end or at the start of the file, as it is: start the text with a newline when the file needs one. With `create: true`, a missing file is created. |
+
+- A heading is the text of a heading (`Code Review Rules`), its full line (`## Code Review Rules`), or a regular expression on its line, written `/^## Code/`. A line in a code fence is no heading.
+- A section starts at its heading and stops at the next heading of the same or a higher level, so it holds its subsections. The blank lines and the `---` rule at its end go with it. A pointer keeps them in place, so the rule still separates the pointer from the next section.
+- The edits apply in order. An edit sees the text that `files` wrote, and the text of the edits before it. The runner writes `claudeMd`, `userClaudeMd` and `skills` after the edits, so the spec refuses an edit of those files.
+
+> **Warning:** an edit that does not apply is an error: a pattern that matches 0 times or more than `count`, a missing or ambiguous heading, a target heading inside the moved section, or a missing file without `create`. A silent no-op would measure the base under the name of the variant. The runs of that config end with status `error` before the agent starts, and they spend nothing. The note names the edit, the file and the reason: `edits[0] AGENTS.md: the pattern matches 0 times, expected 1`.
+
+The run cache keys an edited config by the text that its edits give at the base, not by the rules. Two rules that give the same text share the cached runs. The same rule on a base with another text runs again.
+
+Each eval keeps the diff of the edited files against the base in `configs/<config>/<base>/edits.patch`, and `eval.json` names it in `configs[].editsPatch`. The "Évaluations" view shows it per config in the "Variantes" panel.
+
+Check a variant before you pay for it:
+
+```sh
+pnpm eval:edits <spec.json> [--config <name>] [--write <dir>]
+```
+
+It prints the diff that the edits of each config give at `task.base`, with no clone and no agent. `--write` also writes each edited file to `<dir>/<config>/<path>`. Exit codes: 0 every edit applies, 1 an edit fails, 2 invalid spec or arguments. `--dry-run` of the runner lists the edited files of each config, or the error.
 
 ### Other agents: Codex and opencode
 
@@ -448,6 +485,7 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 | Path | Content |
 |---|---|
 | `eval.json` | Spec, base SHA, CLI version, runs with their metrics, steps and grades, and the median, min, max, pass rate and grade counts per configuration. |
+| `configs/<config>/<base>/edits.patch` | The diff of the files that the `edits` of the config changed, against the base commit. `<base>` is the short SHA. |
 | `runs/<runId>/claude.json` | The CLI result (Claude Code). |
 | `runs/<runId>/events.jsonl` | The raw JSON events (Codex, opencode). |
 | `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. For Codex and opencode, the transcript built from the events. |

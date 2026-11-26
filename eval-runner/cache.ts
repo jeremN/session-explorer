@@ -1,6 +1,6 @@
 // Run cache: a finished run is reused when the agent would get the same thing again. The key holds the task (base
 // commit, prompt, check, hidden tests), the config without its name, and the CLI version. A file of the config counts
-// by its content, so a skill or a CLAUDE.md that changes gives a new key.
+// by its content, so a skill or a CLAUDE.md that changes gives a new key. An edit counts by the text it gives.
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,7 +24,8 @@ function contentOf(path: string): string {
 	return sha(files.map((name) => `${name}\0${sha(readFileSync(join(path, name)))}`).join('\n'));
 }
 
-export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task: Spec['task']; baseSha: string; config: Record<string, unknown>; cliVersion: string; specDir: string }) {
+// `edited`: the files that the edits of the config give at the base (edits.ts), by path.
+export function cacheKey({ task, baseSha, config, cliVersion, specDir, edited }: { task: Spec['task']; baseSha: string; config: Record<string, unknown>; cliVersion: string; specDir: string; edited?: { path: string; after: string }[] }) {
 	const { name: _name, ...rest } = config;
 	const files: Record<string, unknown> = { ...rest };
 	for (const field of ['claudeMd', 'userClaudeMd'] as const) {
@@ -33,6 +34,8 @@ export function cacheKey({ task, baseSha, config, cliVersion, specDir }: { task:
 	}
 	const replaced = rest.files as Record<string, { file?: string; text?: string }> | undefined;
 	if (replaced) files.files = Object.fromEntries(Object.entries(replaced).map(([path, entry]) => [path, entry.file ? { content: contentOf(entry.file) } : entry]));
+	// Two rules that give the same text share a key. The same rule on a base with another text gets a new key.
+	if (rest.edits && edited) files.edits = Object.fromEntries([...edited].sort((a, b) => (a.path < b.path ? -1 : 1)).map(({ path, after }) => [path, { content: sha(after) }]));
 	for (const field of ['settings', 'mcpConfig'] as const) if (typeof rest[field] === 'string') files[field] = { content: contentOf(rest[field] as string) };
 	for (const field of ['skills', 'plugins'] as const) if (Array.isArray(rest[field])) files[field] = (rest[field] as string[]).map((path) => contentOf(path));
 	const prompt = task.prompt ?? (task.promptFile ? contentOf(task.promptFile) : '');

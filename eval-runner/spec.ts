@@ -1,6 +1,6 @@
 // Loads and validates an eval spec. Every error names the field and carries exit code 2.
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 import type { CommandPatterns } from '../context-tracer/tracer.ts';
 
@@ -46,6 +46,9 @@ export type Config = {
 	// Files the runner writes into the clone before the setup commit, by relative path: a variant of a committed
 	// AGENTS.md, for example. The file keeps its path, so it never masks the instruction files of other directories.
 	files?: Record<string, { text: string } | { file: string }>;
+	// Pattern edits of the files of the clone, in order, after `remove` and `files` (edits.ts). One config serves every
+	// base commit: the edit applies to the text of each base.
+	edits?: Edit[];
 	plugins?: string[];
 	permissionMode?: PermissionMode;
 	allowedTools?: string[];
@@ -54,6 +57,16 @@ export type Config = {
 	bare?: boolean;
 	sandbox?: boolean;
 };
+// One edit of a file of the clone. A heading is the text of a Markdown heading, the full heading line, or /regex/flags
+// tested on the heading line.
+export type Edit =
+	| { file: string; replace: string; with: string; flags?: string; count?: number }
+	| { file: string; moveSection: string; after?: string; before?: string; pointer?: string }
+	| { file: string; removeSection: string; pointer?: string }
+	| { file: string; append: string; create?: boolean }
+	| { file: string; prepend: string; create?: boolean };
+export const EDIT_KINDS = ['replace', 'moveSection', 'removeSection', 'append', 'prepend'] as const;
+
 export type Spec = {
 	name: string;
 	dir: string;
@@ -220,6 +233,72 @@ function gradersOf(value: unknown): Grader[] {
 	});
 }
 
+// A heading written /source/flags is a regular expression. Any other heading is a text. Throws on a bad expression.
+export function headingRegex(heading: string): RegExp | undefined {
+	const match = /^\/(.+)\/([a-z]*)$/s.exec(heading);
+	if (!match) return undefined;
+	if (!/^[imsu]*$/.test(match[2])) throw new SyntaxError(`flags ${match[2]}`);
+	return new RegExp(match[1], match[2]);
+}
+
+const EDIT_FIELDS: Record<(typeof EDIT_KINDS)[number], string[]> = {
+	replace: ['file', 'replace', 'with', 'flags', 'count'],
+	moveSection: ['file', 'moveSection', 'after', 'before', 'pointer'],
+	removeSection: ['file', 'removeSection', 'pointer'],
+	append: ['file', 'append', 'create'],
+	prepend: ['file', 'prepend', 'create']
+};
+
+function editsOf(value: unknown, at: string, insideClone: (path: string, field: string) => void): Edit[] {
+	if (!Array.isArray(value) || value.length === 0) return fail(at, 'required non-empty array');
+	return value.map((raw, index): Edit => {
+		const field = `${at}[${index}]`;
+		if (!isObject(raw)) return fail(field, 'required object');
+		const kinds = EDIT_KINDS.filter((kind) => raw[kind] !== undefined && raw[kind] !== null);
+		if (kinds.length !== 1) return fail(field, `set exactly one of ${EDIT_KINDS.join(', ')}`);
+		const kind = kinds[0];
+		const edit = object(raw, field, EDIT_FIELDS[kind]);
+		const file = string(edit.file, `${field}.file`);
+		insideClone(file, `${field}.file`);
+		const heading = (entry: unknown, name: string) => {
+			const text = string(entry, name);
+			try {
+				headingRegex(text);
+			} catch {
+				fail(name, `${text} is not a valid regular expression`);
+			}
+			return text;
+		};
+		const pointer = optional(edit.pointer, `${field}.pointer`, string);
+		const withPointer = pointer === undefined ? {} : { pointer };
+		if (kind === 'replace') {
+			const flags = optional(edit.flags, `${field}.flags`, string);
+			if (flags !== undefined && (!/^[msi]+$/.test(flags) || new Set(flags).size !== flags.length)) fail(`${field}.flags`, 'a combination of m, s and i');
+			const pattern = string(edit.replace, `${field}.replace`);
+			try {
+				new RegExp(pattern, flags);
+			} catch {
+				fail(`${field}.replace`, `${pattern} is not a valid regular expression`);
+			}
+			// An empty `with` deletes the match.
+			if (typeof edit.with !== 'string') fail(`${field}.with`, 'required string');
+			const count = optional(edit.count, `${field}.count`, (entry, name) => number(entry, name, 1, 1000, true));
+			return { file, replace: pattern, with: edit.with as string, ...(flags === undefined ? {} : { flags }), ...(count === undefined ? {} : { count }) };
+		}
+		if (kind === 'moveSection') {
+			const after = optional(edit.after, `${field}.after`, heading);
+			const before = optional(edit.before, `${field}.before`, heading);
+			if ((after === undefined) === (before === undefined)) fail(field, 'set exactly one of after and before');
+			return { file, moveSection: heading(edit.moveSection, `${field}.moveSection`), ...(after === undefined ? { before } : { after }), ...withPointer };
+		}
+		if (kind === 'removeSection') return { file, removeSection: heading(edit.removeSection, `${field}.removeSection`), ...withPointer };
+		const text = string(edit[kind], `${field}.${kind}`);
+		if (edit.create !== undefined && edit.create !== null && typeof edit.create !== 'boolean') fail(`${field}.create`, 'required boolean');
+		const create = edit.create === true ? { create: true } : {};
+		return kind === 'append' ? { file, append: text, ...create } : { file, prepend: text, ...create };
+	});
+}
+
 function commandsOf(value: unknown): CommandPatterns {
 	const commands = object(value, 'spec.commands', ['test', 'types', 'lint', 'build']);
 	const result: CommandPatterns = {};
@@ -262,7 +341,7 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const seen = new Set<string>();
 	const configs = (spec.configs as unknown[]).map((entry, index) => {
 		const at = `spec.configs[${index}]`;
-		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'remove', 'files', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
+		const config = object(entry, at, ['name', 'model', 'effort', 'claudeMd', 'userClaudeMd', 'appendSystemPrompt', 'settings', 'skills', 'remove', 'files', 'edits', 'plugins', 'permissionMode', 'allowedTools', 'disallowedTools', 'mcpConfig', 'bare', 'sandbox', 'agent', 'price', 'container', 'containerEnv', 'containerAllow']);
 		const configName = string(config.name, `${at}.name`);
 		if (!/^[a-z0-9-]+$/.test(configName)) fail(`${at}.name`, 'must match [a-z0-9-]+');
 		if (seen.has(configName)) fail(`${at}.name`, `duplicate config name "${configName}"`);
@@ -306,6 +385,8 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 				result.files[path] = entry.text !== undefined ? { text: string(entry.text, `${at}.files.${path}.text`) } : { file: resolve(dir, string(entry.file, `${at}.files.${path}.file`)) };
 			}
 		}
+		const edits = optional(config.edits, `${at}.edits`, (value, field) => editsOf(value, field, insideClone));
+		if (edits) result.edits = edits;
 		for (const key of ['allowedTools', 'disallowedTools'] as const) {
 			const value = optional(config[key], `${at}.${key}`, strings);
 			if (value) result[key] = value;
@@ -364,6 +445,12 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 			if (result.agent === 'opencode' && !result.container && result.sandbox !== false) fail(`${at}.sandbox`, 'opencode has no sandbox: its shell runs on this machine, outside the clone. Set container: true, or sandbox: false to accept that');
 			// Without a model, opencode takes the last model of the user (~/.local/state/opencode/model.json).
 			if (result.agent === 'opencode' && !result.model) fail(`${at}.model`, 'opencode needs a model, as provider/model');
+		}
+		// The runner writes these files after the edits, so an edit of one of them would be lost.
+		const later = [...(result.claudeMd ? [result.agent ? 'AGENTS.md' : 'CLAUDE.md'] : []), ...(result.userClaudeMd ? ['CLAUDE.local.md'] : [])];
+		const skillDirs = (result.skills ?? []).map((skill) => `.claude/skills/${basename(skill)}`);
+		for (const [index, edit] of (result.edits ?? []).entries()) {
+			if (later.includes(edit.file) || skillDirs.some((target) => edit.file === target || edit.file.startsWith(`${target}/`))) fail(`${at}.edits[${index}].file`, `the runner writes ${edit.file} after the edits (claudeMd, userClaudeMd or skills): edit it there`);
 		}
 		return result;
 	});

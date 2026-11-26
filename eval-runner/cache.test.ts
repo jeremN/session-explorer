@@ -54,6 +54,21 @@ test('a referenced file counts by its content, not by its path', () => {
 	assert.notEqual(key({ config: { files: { 'AGENTS.md': { file: join(dir, 'c.md') } } } }), byFiles);
 });
 
+test('edits count by the text they produce, not by their rules', () => {
+	const byEdits = (edits: unknown[], edited: { path: string; after: string }[]) => cacheKey({ task, baseSha: 'abc', config: { name: 'a', model: 'sonnet', edits }, cliVersion: '2.1.325', specDir: '/specs', edited });
+	const replace = [{ file: 'AGENTS.md', replace: '^Frequent.*$', flags: 'm', with: 'Verify.' }];
+	const other = [{ file: 'AGENTS.md', replace: 'Frequent commands: [^\\n]*', with: 'Verify.' }];
+	const same = byEdits(replace, [{ path: 'AGENTS.md', after: 'Verify.\n' }]);
+	assert.equal(byEdits(other, [{ path: 'AGENTS.md', after: 'Verify.\n' }]), same);
+	// The same rule on another base text: same base SHA, a new produced text, a new key.
+	assert.notEqual(byEdits(replace, [{ path: 'AGENTS.md', after: 'Verify.\nMore.\n' }]), same);
+	assert.notEqual(byEdits(replace, [{ path: 'docs/AGENTS.md', after: 'Verify.\n' }]), same);
+	assert.notEqual(same, key());
+	// The order of the files does not count.
+	const two = (first: string, second: string) => byEdits(replace, [first, second].map((path) => ({ path, after: path })));
+	assert.equal(two('A.md', 'B.md'), two('B.md', 'A.md'));
+});
+
 test('readCache returns the finished runs of a key, newest last; error and skipped runs are not kept', () => {
 	const cache = join(root, 'cache');
 	const run = (id: string, status: RunRecord['status']): RunRecord => ({ id, config: 'a', status });

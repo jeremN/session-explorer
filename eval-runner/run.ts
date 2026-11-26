@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { cacheKey, readCache, writeCache } from './cache.ts';
 import { claudeInvocation, claudeOutcome, codexHome, codexInvocation, codexOutcome, opencodeConfigHome, opencodeInvocation, opencodeOutcome } from './agents.ts';
@@ -13,6 +13,8 @@ import { runCheck } from './check.ts';
 import { startServices, stopServices } from './services.ts';
 import type { Services } from './services.ts';
 import { setupFiles } from './command.ts';
+import { editsPatch, previewEdits } from './edits.ts';
+import type { EditedFile } from './edits.ts';
 import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerHome, containerName, containerize, imageArgs, imageProblem, imageTag, networkOf, removeContainer, startNetwork, stopNetwork } from './container.ts';
 import type { Network } from './container.ts';
 import { realExec } from './exec.ts';
@@ -312,10 +314,22 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		console.error(problem);
 		return { code: 2 };
 	}
+	// The files that the edits of each config give at the base. The cache key and edits.patch read them. An edit that
+	// fails ends the runs of its config before the agent starts, so it costs nothing.
+	const edited: Record<string, EditedFile[]> = {};
+	const editErrors: Record<string, string> = {};
+	for (const config of spec.configs) {
+		if (!config.edits) continue;
+		try {
+			edited[config.name] = await previewEdits(exec, { repo: spec.task.repo, baseSha, config });
+		} catch (error) {
+			editErrors[config.name] = (error as Error).message.slice(0, 300);
+		}
+	}
 	const cacheDir = join(options.out, 'cache');
-	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir })]));
+	const keys = Object.fromEntries(spec.configs.map((config) => [config.name, cacheKey({ task: spec.task, baseSha, config, cliVersion: versionOf(config), specDir: spec.dir, edited: edited[config.name] })]));
 	// The newest cached runs of each config, at most `spec.runs`. An unknown CLI version never reuses a run.
-	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
+	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' || editErrors[config.name] ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
 	// A reused run carries no grade: recheck.ts copies a graded record into the cache, and the graders of this spec grade it again.
 	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record: { grades: _grades, ...record } }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
 	// The behavior counts of a reused run come from its saved transcript, with the command patterns of this spec.
@@ -336,16 +350,31 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 		const { command, args } = invocationOf(run.config, { sessionId: '<session-id>', perRunUsd: spec.budget.perRunUsd, runDir: join(evalDir, 'runs', run.id), opencodeVersion: versions.opencode }, '<prompt>', { home: '<home>', clone, image, name: containerName(evalId, run.id) }, options);
 		console.log(`${run.id} config=${run.config.name} agent=${agent}${run.config.container ? ` (container, allow ${networkFor(run.config, '').allow.join(',')})` : ''} model=${run.config.model ?? 'default'} clone=${clone} argv: ${command} ${args.join(' ')}`);
 	}
+	for (const config of spec.configs) if (config.edits) console.log(`${config.name} edits: ${editErrors[config.name] ?? edited[config.name].map((file) => file.path).join(', ')}`);
 	console.log(`Maximum spend: ${dollars(maxSpend)} $ (per run ${spec.budget.perRunUsd} $, per eval ${spec.budget.perEvalUsd} $)`);
 	if (options.dryRun) return { code: 0 };
 
 	const statusBefore = await sourceStatus(exec, spec.task.repo);
 	mkdirSync(join(evalDir, 'runs'), { recursive: true });
+	// What each config measured: the diff of its edited files against the base.
+	const editsPatches: Record<string, string> = {};
+	for (const [name, files] of Object.entries(edited)) {
+		const path = `configs/${name}/${baseSha.slice(0, 7)}/edits.patch`;
+		mkdirSync(join(evalDir, dirname(path)), { recursive: true });
+		writeFileSync(join(evalDir, path), await editsPatch(exec, files));
+		editsPatches[name] = path;
+	}
 	const context: RunContext = { exec, spec, options, baseSha, evalId, evalDir, image, opencodeVersion: versions.opencode };
 	const runs: RunRecord[] = [...reused];
 	let spent = 0;
 	let anyFailed = false;
 	for (const [position, run] of planned.entries()) {
+		if (editErrors[run.config.name]) {
+			runs.push({ id: run.id, config: run.config.name, status: 'error', note: editErrors[run.config.name] });
+			anyFailed = true;
+			console.log(`[${position + 1}/${planned.length}] ${run.id} error: ${editErrors[run.config.name]}`);
+			continue;
+		}
 		// Each run is capped, so this rule bounds the total before it is spent, not after.
 		if (spent + spec.budget.perRunUsd > spec.budget.perEvalUsd) {
 			runs.push({ id: run.id, config: run.config.name, status: 'skipped', note: 'the eval budget would pass' });
@@ -381,7 +410,7 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 			baseSha,
 			spec,
 			spent: dollars(spent),
-			configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name] })),
+			configs: spec.configs.map((config) => ({ name: config.name, agent: config.agent ?? 'claude', model: config.model ?? null, ...stats[config.name], ...(editsPatches[config.name] ? { editsPatch: editsPatches[config.name] } : {}) })),
 			runs
 		};
 		writeFileSync(join(evalDir, 'eval.json'), JSON.stringify(saved));

@@ -1,15 +1,17 @@
 // One throwaway clone per run. The clone has no remote, so nothing the agent does reaches the source repository.
-// The source repository is read by `clone`, `rev-parse` and `status` only.
+// The source repository is read by `clone`, `rev-parse`, `status` and `show` only (edits.ts adds `ls-tree` and `cat-file`).
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import type { Exec } from './exec.ts';
-import type { Config, Spec } from './spec.ts';
+import { applyEdits } from './edits.ts';
+import type { Config, Edit, Spec } from './spec.ts';
 
 // `instructionFile` is the name the claudeMd gets in the clone: CLAUDE.md, or AGENTS.md for codex and opencode.
 // `localMd` becomes CLAUDE.local.md: Claude Code reads it with the CLAUDE.md of the project, as a user CLAUDE.md.
-// `remove` is deleted first, so a claudeMd or a skill of the config can take the place of a removed file.
-type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string; remove?: string[]; files?: Config['files'] };
+// `remove` is deleted first, so a claudeMd or a skill of the config can take the place of a removed file. `edits` come
+// after `remove` and `files`, so an edit of a file that `files` wrote sees the new text.
+type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skills: string[]; instructionFile?: string; remove?: string[]; files?: Config['files']; edits?: Edit[] };
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
@@ -50,6 +52,22 @@ function refuseSymlinks(dir: string, relative: string) {
 			return;
 		}
 	}
+}
+
+// The text of a file of the clone before an edit, or undefined when it does not exist. The base commit is not trusted:
+// the file or a parent directory can be a symlink, and a read through it would edit a file outside the clone.
+function readForEdit(dir: string, path: string): string | undefined {
+	refuseSymlinks(dir, path);
+	let stat;
+	try {
+		stat = lstatSync(join(dir, path));
+	} catch (error) {
+		if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return undefined;
+		throw error;
+	}
+	if (stat.isSymbolicLink()) throw new Error('the file is a symlink');
+	if (!stat.isFile()) throw new Error('not a file at the base commit');
+	return readFileSync(join(dir, path), 'utf8');
 }
 
 // Hidden tests come from the solution commit of a mined task. They enter the clone after the agent stops, so the agent
@@ -94,6 +112,12 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 		rmSync(join(dir, path), { recursive: true, force: true });
 		mkdirSync(dirname(join(dir, path)), { recursive: true });
 		writeFileSync(join(dir, path), 'text' in content ? content.text : readFileSync(content.file, 'utf8'));
+	}
+	for (const { path, after } of applyEdits(setup.edits ?? [], (path) => readForEdit(dir, path))) {
+		refuseSymlinks(dir, path);
+		rmSync(join(dir, path), { force: true });
+		mkdirSync(dirname(join(dir, path)), { recursive: true });
+		writeFileSync(join(dir, path), after);
 	}
 	const instructions: [string, Config['claudeMd']][] = [[setup.instructionFile ?? 'CLAUDE.md', setup.claudeMd], ['CLAUDE.local.md', setup.localMd]];
 	for (const [file, md] of instructions) {

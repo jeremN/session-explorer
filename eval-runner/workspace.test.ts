@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
+import { setupFiles } from './command.ts';
+import { previewEdits } from './edits.ts';
 import { realExec } from './exec.ts';
+import type { Edit } from './spec.ts';
 import { collectDiff, createWorkspace, placeHiddenTests, removeWorkspace, resolveBase, sourceStatus } from './workspace.ts';
 
 let root: string;
@@ -419,5 +422,65 @@ test('files replaces committed files and adds new ones in the setup commit, so t
 	assert.deepEqual((await git(dir, 'show', '--name-only', '--format=', setupSha)).trim().split('\n').sort(), ['AGENTS.md', 'docs/new/NOTE.md']);
 	assert.equal((await collectDiff(realExec, dir, setupSha, gitDir)).files, 0);
 	await removeWorkspace(dir);
+});
+
+test('edits apply after remove and files, in the setup commit: an edit of a file that files wrote sees the new text', async () => {
+	mkdirSync(join(repo, 'apps', 'web'), { recursive: true });
+	writeFileSync(join(repo, 'AGENTS.md'), '# Rules\n\nFrequent commands: `pnpm lint`.\n');
+	writeFileSync(join(repo, 'apps', 'web', 'AGENTS.md'), 'web rules\n');
+	await git(repo, 'add', '-A');
+	await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'edits harness');
+	const head = (await git(repo, 'rev-parse', 'HEAD')).trim();
+	const config = {
+		name: 'variant',
+		remove: ['apps/web'],
+		files: { 'apps/bff/AGENTS.md': { text: 'bff variant\n' } },
+		edits: [
+			{ file: 'AGENTS.md', replace: '^Frequent commands: .*$', flags: 'm', with: 'Verify in this order.' },
+			{ file: 'apps/bff/AGENTS.md', append: 'edited\n' },
+			{ file: 'apps/web/AGENTS.md', prepend: 'back\n', create: true }
+		] as Edit[]
+	};
+	const dir = join(root, 'clones', 'edits');
+	const gitDir = gitDirOf('edits');
+	const { setupSha } = await createWorkspace(realExec, { repo, baseSha: head, dir, gitDir, setup: setupFiles(config) });
+	assert.equal(readFileSync(join(dir, 'AGENTS.md'), 'utf8'), '# Rules\n\nVerify in this order.\n');
+	assert.equal(readFileSync(join(dir, 'apps', 'bff', 'AGENTS.md'), 'utf8'), 'bff variant\nedited\n');
+	assert.equal(readFileSync(join(dir, 'apps', 'web', 'AGENTS.md'), 'utf8'), 'back\n');
+	assert.deepEqual((await git(dir, 'show', '--name-only', '--format=', setupSha)).trim().split('\n').sort(), ['AGENTS.md', 'apps/bff/AGENTS.md', 'apps/web/AGENTS.md']);
+	assert.equal((await collectDiff(realExec, dir, setupSha, gitDir)).files, 0);
+	// The preview of the cache key and of edits.patch reads git, and gives the same text as the clone.
+	const preview = await previewEdits(realExec, { repo, baseSha: head, config });
+	assert.equal(preview.length, 3);
+	for (const file of preview) assert.equal(file.after, readFileSync(join(dir, file.path), 'utf8'), file.path);
+	await removeWorkspace(dir);
+});
+
+test('an edit that fails stops the workspace before the setup commit, with the edit index in the message', async () => {
+	const dir = join(root, 'clones', 'edits-fail');
+	await assert.rejects(() => createWorkspace(realExec, { repo, baseSha: base, dir, gitDir: gitDirOf('edits-fail'), setup: { ...plain, edits: [{ file: 'a.txt', replace: 'nowhere', with: '' }] } }), { name: 'EditError', message: 'edits[0] a.txt: the pattern matches 0 times, expected 1' });
+	await removeWorkspace(dir);
+});
+
+test('an edit of a file that is a symlink in the base commit is refused, and the target stays untouched', async () => {
+	const victim = join(root, 'victim-edit.txt');
+	writeFileSync(victim, 'precious\n');
+	const evil = join(root, 'evil-edit');
+	mkdirSync(evil);
+	await git(evil, 'init', '-q', '-b', 'main');
+	await git(evil, 'config', 'user.email', 't@localhost');
+	await git(evil, 'config', 'user.name', 't');
+	symlinkSync(victim, join(evil, 'AGENTS.md'));
+	mkdirSync(join(evil, 'real'));
+	symlinkSync('real', join(evil, 'linked'));
+	writeFileSync(join(evil, 'real', 'AGENTS.md'), 'inner\n');
+	await git(evil, 'add', '-A');
+	await git(evil, 'commit', '-q', '-m', 'link');
+	const sha = await git(evil, 'rev-parse', 'HEAD');
+	const setup = (file: string) => ({ ...plain, edits: [{ file, append: 'x' }] });
+	await assert.rejects(() => createWorkspace(realExec, { repo: evil, baseSha: sha, dir: join(root, 'clones', 'edit-link'), gitDir: gitDirOf('edit-link'), setup: setup('AGENTS.md') }), /^EditError: edits\[0\] AGENTS\.md: the file is a symlink$/);
+	await assert.rejects(() => createWorkspace(realExec, { repo: evil, baseSha: sha, dir: join(root, 'clones', 'edit-link2'), gitDir: gitDirOf('edit-link2'), setup: setup('linked/AGENTS.md') }), /edits\[0\] linked\/AGENTS\.md: .*symlink/);
+	assert.equal(readFileSync(victim, 'utf8'), 'precious\n');
+	await assert.rejects(previewEdits(realExec, { repo: evil, baseSha: sha, config: { name: 'v', edits: [{ file: 'AGENTS.md', append: 'x' }] } }), /^EditError: edits\[0\] AGENTS\.md: the file is a symlink$/);
 });
 
