@@ -323,3 +323,11 @@ test('commands: regexes per class that add to the default command classes', () =
 	failure({ ...base(), commands: { types: ['('] } }, 'spec.commands.types[0]');
 	failure({ ...base(), commands: [] }, 'spec.commands');
 });
+
+test('task.mirror: false opts out of the mirror, and only false is kept', () => {
+	const task = (mirror: unknown) => ({ ...base(), task: { ...base().task, mirror } });
+	assert.equal(validateSpec(task(false), '/s').task.mirror, false);
+	assert.equal('mirror' in validateSpec(task(true), '/s').task, false);
+	assert.equal('mirror' in validateSpec(base(), '/s').task, false);
+	failure(task('no'), 'spec.task.mirror');
+});

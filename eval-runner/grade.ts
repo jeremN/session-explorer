@@ -17,6 +17,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setupFiles } from './command.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
+import { prepareMirror } from './mirror.ts';
 import { loadSpec } from './spec.ts';
 import type { CommandGrader, Config, Grader, GraderMerge, PatternGrader, Spec } from './spec.ts';
 import { gradeStats, median } from './stats.ts';
@@ -134,7 +135,7 @@ export function graderOutput(stdout: string): { findings: Finding[]; costUsd?: n
 }
 
 // What a grade pass needs. `runs` are the records it changes: each gets `grades[<grader>]`.
-export type GradeTarget = { evalId: string; evalDir: string; baseSha: string; spec: { dir: string; task: Spec['task']; configs: Config[]; budget?: Partial<Spec['budget']>; graders?: Grader[] }; runs: RunRecord[] };
+export type GradeTarget = { evalId: string; evalDir: string; baseSha: string; spec: { dir: string; task: Spec['task']; configs: Config[]; budget?: Partial<Spec['budget']>; graders?: Grader[] }; runs: RunRecord[]; mirror?: string };
 export type GradeOptions = { exec?: Exec; graders?: string[]; runs?: string[]; force?: boolean };
 
 // The diff of the run, or of the run it reuses from the run cache.
@@ -243,7 +244,7 @@ async function runCommand(exec: Exec, target: GradeTarget, grader: CommandGrader
 		copyFileSync(patch, diff);
 		// Blind: the clone holds the base and the task setup only, never the harness files of the config. Every diff is then
 		// judged against the same instruction files, and the clone does not reveal the config.
-		await rebuildRun(exec, { task: target.spec.task, baseSha: target.baseSha, specDir: target.spec.dir, setup: setupFiles(grader.blind ? { name: 'base' } : config), patch: diff, dir: clone, gitDir });
+		await rebuildRun(exec, { task: target.spec.task, baseSha: target.baseSha, specDir: target.spec.dir, setup: setupFiles(grader.blind ? { name: 'base' } : config), patch: diff, dir: clone, gitDir, mirror: target.mirror });
 		const env = { EVAL_GRADE_ID: id, EVAL_BASE: target.baseSha, EVAL_DIFF: diff, EVAL_SPEC_DIR: target.spec.dir, ...(grader.blind ? {} : { EVAL_CONFIG: run.config, EVAL_RUN_ID: run.id }) };
 		const results: SampleResult[] = [];
 		for (let sample = 0; sample < samples; sample++) {
@@ -282,6 +283,9 @@ export async function gradeRuns(target: GradeTarget, { exec = realExec, graders:
 	const graders = (target.spec.graders ?? []).filter((grader) => !only || only.includes(grader.name));
 	const cacheDir = join(dirname(target.evalDir), 'cache', 'grades');
 	const budget: Budget = { spent: 0, cap: target.spec.budget?.gradersUsd, costs: [] };
+	// The clone of a command grader comes from the mirror of the repo. A grade without a mirror (grade.ts alone) makes it at the first clone.
+	let mirror = target.mirror;
+	let mirrorTried = false;
 	const todo: { run: RunRecord; patch: string; diff: string }[] = [];
 	for (const run of target.runs.filter((entry) => !onlyRuns || onlyRuns.includes(entry.id))) {
 		const patch = patchOf(target.evalDir, run);
@@ -307,7 +311,15 @@ export async function gradeRuns(target: GradeTarget, { exec = realExec, graders:
 				grade = { ...cached, flagged: cached.flagged ?? cached.findings.length > 0, cached: true };
 			} else if (!fits(budget)) grade = { status: 'budget', id, findings: [], note: 'the graders budget is spent' };
 			else {
-				grade = await runCommand(exec, target, grader, run, patch, id, budget);
+				if (!mirror && !mirrorTried && target.spec.task.mirror !== false) {
+					mirrorTried = true;
+					try {
+						mirror = await prepareMirror(exec, { repo: target.spec.task.repo, baseSha: target.baseSha, cacheDir: join(dirname(target.evalDir), 'cache') });
+					} catch (error) {
+						console.error(`${(error as Error).message}. The graders clone from the repository itself.`);
+					}
+				}
+				grade = await runCommand(exec, { ...target, mirror }, grader, run, patch, id, budget);
 				// A grade with a sample that the budget stopped stays out of the cache: the next pass runs all its samples.
 				if (grade.status === 'ok' && !grade.samples?.some((sample) => sample.status === 'budget')) {
 					mkdirSync(cacheDir, { recursive: true });

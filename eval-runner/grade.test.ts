@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { realExec } from './exec.ts';
+import type { Exec } from './exec.ts';
 import { main, patternFindings } from './grade.ts';
 import type { PatternGrader } from './spec.ts';
 
@@ -418,4 +419,24 @@ test('samples 1 and merge majority keep the cache key of a grader without them',
 	assert.equal(seen(specDir).length, 1);
 	assert.equal(saved(evalDir).runs[0].grades.review.cached, true);
 	assert.equal(saved(evalDir).runs[0].grades.review.flagged, true);
+});
+
+test('a blind grader clones the base from the mirror in the cache, not from the source repo', async () => {
+	const { repo, evalDir, base } = await fixture('mirrored', [review('ok')]);
+	const calls: string[][] = [];
+	const exec: Exec = (command, args, options) => {
+		if (command === 'git') calls.push(args);
+		return realExec(command, args, options);
+	};
+	const { code, lines } = await quiet(() => main([evalDir], exec));
+	assert.equal(code, 0, lines.join('\n'));
+	const mirrors = readdirSync(join(evalDir, '..', 'cache', 'mirrors'));
+	assert.equal(mirrors.length, 1);
+	const mirror = join(evalDir, '..', 'cache', 'mirrors', mirrors[0]);
+	const fetches = calls.filter((args) => args[0] === 'fetch' && args.includes('--no-tags') && args.includes(base));
+	assert.equal(fetches.length >= 2, true);
+	for (const args of fetches) {
+		assert.ok(args.includes(mirror), args.join(' '));
+		assert.ok(!args.includes(repo), args.join(' '));
+	}
 });

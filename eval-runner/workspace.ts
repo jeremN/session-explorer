@@ -15,7 +15,7 @@ type Setup = { claudeMd: Config['claudeMd']; localMd?: Config['claudeMd']; skill
 
 const AUTHOR = ['-c', 'user.name=eval-runner', '-c', 'user.email=eval-runner@localhost', '-c', 'commit.gpgsign=false'];
 // No git auto maintenance: after a commit it runs in the background and rewrites .git while the runner copies it.
-const ENV = { GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0' };
+export const ENV = { GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0' };
 
 // After the agent started, everything in the clone is hostile, `.git` included: it can be a symlink, a `gitdir:` file,
 // or hold the config, hooks and attributes of the agent. So the runner never reads or writes the `.git` of the clone
@@ -114,6 +114,7 @@ export async function placeHiddenTests(exec: Exec, { repo, commit, paths, dir }:
 	}
 }
 
+// `repo` is the source of the clone: the mirror of the repository (mirror.ts), or the repository itself.
 // `gitDir` is the copy of the git dir that the runner keeps outside the clone, at a path the agent never gets.
 // collectDiff uses only that copy.
 export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, setup }: { repo: string; baseSha: string; dir: string; gitDir: string; setup: Setup }) {
@@ -183,8 +184,8 @@ export async function createWorkspace(exec: Exec, { repo, baseSha, dir, gitDir, 
 
 // A new clone at the base, the setup files of the config, the setup command of the task, then the saved diff.patch of
 // a run. recheck.ts runs the check on it again, and grade.ts grades it.
-export async function rebuildRun(exec: Exec, { task, baseSha, specDir, setup, patch, dir, gitDir }: { task: Spec['task']; baseSha: string; specDir: string; setup: Setup; patch: string; dir: string; gitDir: string }) {
-	const workspace = await createWorkspace(exec, { repo: task.repo, baseSha, dir, gitDir, setup });
+export async function rebuildRun(exec: Exec, { task, baseSha, specDir, setup, patch, dir, gitDir, mirror }: { task: Spec['task']; baseSha: string; specDir: string; setup: Setup; patch: string; dir: string; gitDir: string; mirror?: string }) {
+	const workspace = await createWorkspace(exec, { repo: mirror ?? task.repo, baseSha, dir, gitDir, setup });
 	if (task.setup) {
 		const prepared = await exec('sh', ['-c', task.setup.command], { cwd: dir, env: { EVAL_SPEC_DIR: specDir }, timeoutMs: task.setup.timeoutSec * 1000 });
 		if (prepared.code !== 0 || prepared.timedOut) throw new Error(`setup failed: ${(prepared.stdout + prepared.stderr).trim().slice(-200)}`);

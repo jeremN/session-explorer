@@ -71,7 +71,7 @@ export type Spec = {
 	name: string;
 	dir: string;
 	// category: the kind of task, for the routing table (matrix.ts). Not part of the cache key.
-	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] }; services?: Service[] };
+	task: { repo: string; base: string; category?: string; prompt?: string; promptFile?: string; timeoutSec: number; setup?: { command: string; timeoutSec: number }; acceptance: { command: string; timeoutSec: number; infraExitCode?: number }; hiddenTests?: { commit: string; paths: string[] }; services?: Service[]; mirror?: false };
 	// gradersUsd: the budget of the command graders, apart from the budget of the agents.
 	budget: { perRunUsd: number; perEvalUsd: number; gradersUsd?: number };
 	runs: number;
@@ -314,10 +314,12 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
-	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'setup', 'acceptance', 'hiddenTests', 'services']);
+	const task = object(spec.task, 'spec.task', ['repo', 'base', 'category', 'prompt', 'promptFile', 'timeoutSec', 'setup', 'acceptance', 'hiddenTests', 'services', 'mirror']);
 	const prompt = optional(task.prompt, 'spec.task.prompt', string);
 	const promptFile = optional(task.promptFile, 'spec.task.promptFile', string);
 	if ((prompt === undefined) === (promptFile === undefined)) fail('spec.task.prompt', 'set exactly one of prompt and promptFile');
+	const mirror = task.mirror ?? true;
+	if (typeof mirror !== 'boolean') fail('spec.task.mirror', 'true or false');
 	const acceptance = object(task.acceptance, 'spec.task.acceptance', ['command', 'timeoutSec', 'infraExitCode']);
 	let hiddenTests: { commit: string; paths: string[] } | undefined;
 	if (task.hiddenTests !== undefined && task.hiddenTests !== null) {
@@ -472,7 +474,9 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 				...infraExitCodeOf(acceptance.infraExitCode)
 			},
 			...(hiddenTests === undefined ? {} : { hiddenTests }),
-			...(task.services === undefined || task.services === null ? {} : { services: servicesOf(task.services) })
+			...(task.services === undefined || task.services === null ? {} : { services: servicesOf(task.services) }),
+			// Only the opt-out is kept: the mirror is the default.
+			...(mirror === false ? { mirror } : {})
 		},
 		budget: {
 			perRunUsd: number(budget.perRunUsd, 'spec.budget.perRunUsd', 0.000001),
