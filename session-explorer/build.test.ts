@@ -68,6 +68,13 @@ test('summarizeSession: one index row', () => {
 	});
 });
 
+test('summarizeSession: the behavior metrics, when given, go in a behavior field', () => {
+	const parsed = { title: 't', start: 's', agents: [], events: [tool(0, 'prompt')] };
+	const behavior = { toolCalls: 2, explore: 1, edits: 1, testRuns: 0, testFailures: 0, redGreenCycles: 0, typeChecks: 0, lintRuns: 0, rereads: 0, reruns: 0, toolErrors: 0, firstContextTokens: 100 };
+	assert.deepEqual(summarizeSession('abc', 'proj', parsed, [], behavior).behavior, behavior);
+	assert.equal('behavior' in summarizeSession('abc', 'proj', parsed, []), false);
+});
+
 test('summarizeSession: no llm request gives zero cost and zero cache share', () => {
 	const parsed = { title: 't', start: 's', agents: [], events: [tool(0, 'prompt')] };
 	const row = summarizeSession('abc', 'proj', parsed, []);

@@ -265,3 +265,12 @@ test('graders: a command grader takes samples from 1 to 5 and merge majority or 
 	failure(pattern({ merge: 'union' }), 'spec.graders[0].merge');
 });
 
+test('commands: regexes per class that add to the default command classes', () => {
+	const spec = validateSpec({ ...base(), commands: { test: ['^make check\\b'], lint: ['stylelint'] } }, '/s');
+	assert.deepEqual(spec.commands, { test: ['^make check\\b'], lint: ['stylelint'] });
+	assert.equal('commands' in validateSpec(base(), '/s'), false);
+	failure({ ...base(), commands: { tests: ['x'] } }, 'spec.commands.tests');
+	failure({ ...base(), commands: { test: 'x' } }, 'spec.commands.test');
+	failure({ ...base(), commands: { types: ['('] } }, 'spec.commands.types[0]');
+	failure({ ...base(), commands: [] }, 'spec.commands');
+});

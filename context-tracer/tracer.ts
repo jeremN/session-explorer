@@ -212,10 +212,10 @@ export function commandClasses(command: string): CommandClass[] {
 // A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.
 // The auto mode classifier had no answer, so the call never ran. Its result is not an outcome of the command.
 export const OUTAGE = /^The server-side auto mode classifier gave no verdict/;
-const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
+export const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
-const resultText = (content: unknown) =>
+export const resultText = (content: unknown) =>
 	typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => text(block?.text)).join('\n') : '';
 
 function knowledgeSource(collections: string[]): EventKind | undefined {
