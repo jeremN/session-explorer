@@ -331,11 +331,11 @@ Each edit names a `file`: a relative path inside the clone, outside `.git`, as f
 - A section starts at its heading and stops at the next heading of the same or a higher level, so it holds its subsections. The blank lines and the `---` rule at its end go with it. A pointer keeps them in place, so the rule still separates the pointer from the next section.
 - The edits apply in order. An edit sees the text that `files` wrote, and the text of the edits before it. The runner writes `claudeMd`, `userClaudeMd` and `skills` after the edits, so the spec refuses an edit of those files.
 
-> **Warning:** an edit that does not apply is an error: a pattern that matches 0 times or more than `count`, a missing or ambiguous heading, a target heading inside the moved section, or a missing file without `create`. A silent no-op would measure the base under the name of the variant. The runs of that config end with status `error` before the agent starts, and they spend nothing. The note names the edit, the file and the reason: `edits[0] AGENTS.md: the pattern matches 0 times, expected 1`.
+> **Warning:** an edit that does not apply is an error: a pattern that matches 0 times or more than `count`, a missing or ambiguous heading, a target heading inside the moved section, an edit that changes nothing, or a missing file without `create`. A silent no-op would measure the base under the name of the variant. The runs of that config end with status `error` before the agent starts, and they spend nothing. The note names the edit, the file and the reason: `edits[0] AGENTS.md: the pattern matches 0 times, expected 1`.
 
 The run cache keys an edited config by the text that its edits give at the base, not by the rules. Two rules that give the same text share the cached runs. The same rule on a base with another text runs again.
 
-Each eval keeps the diff of the edited files against the base in `configs/<config>/<base>/edits.patch`, and `eval.json` names it in `configs[].editsPatch`. The "Évaluations" view shows it per config in the "Variantes" panel.
+Each eval keeps the diff of the edited files in `configs/<config>/<base>/edits.patch`: from the text before the edits (the base commit, after `remove` and `files`) to the text after them, and `eval.json` names it in `configs[].editsPatch`. The "Évaluations" view shows it per config in the "Variantes" panel.
 
 Check a variant before you pay for it:
 
@@ -485,7 +485,7 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 | Path | Content |
 |---|---|
 | `eval.json` | Spec, base SHA, CLI version, runs with their metrics, steps and grades, and the median, min, max, pass rate and grade counts per configuration. |
-| `configs/<config>/<base>/edits.patch` | The diff of the files that the `edits` of the config changed, against the base commit. `<base>` is the short SHA. |
+| `configs/<config>/<base>/edits.patch` | The diff of the files that the `edits` of the config changed, from their text before the edits. `<base>` is the short SHA of the base commit. |
 | `runs/<runId>/claude.json` | The CLI result (Claude Code). |
 | `runs/<runId>/events.jsonl` | The raw JSON events (Codex, opencode). |
 | `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. For Codex and opencode, the transcript built from the events. |

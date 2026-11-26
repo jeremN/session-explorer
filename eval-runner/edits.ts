@@ -135,7 +135,9 @@ export function applyEdits(edits: Edit[], read: (path: string) => string | undef
 				files.set(edit.file, { before, text: before });
 			}
 			const file = files.get(edit.file)!;
-			file.text = applyOne(edit, file.text);
+			const text = applyOne(edit, file.text);
+			if (text === file.text) throw new EditError('the edit changes nothing');
+			file.text = text;
 		} catch (error) {
 			throw new EditError(`edits[${index}] ${edit.file}: ${(error as Error).message}`);
 		}

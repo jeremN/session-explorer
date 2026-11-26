@@ -147,6 +147,11 @@ test('the edits apply in order: each one sees the text of the one before, and th
 	fails([{ file: 'AGENTS.md', append: 'x' }, { file: 'AGENTS.md', replace: 'nowhere', with: '' }], /^edits\[1\] AGENTS\.md: /);
 });
 
+test('an edit that changes nothing is an error: the variant would be the base under another name', () => {
+	fails([{ file: 'AGENTS.md', replace: 'Intro line', with: 'Intro line' }], /^edits\[0\] AGENTS\.md: the edit changes nothing$/);
+	fails([{ file: 'AGENTS.md', moveSection: 'Code Review Rules', after: '### Creating GitLab merge requests' }], /^edits\[0\] AGENTS\.md: the edit changes nothing$/);
+});
+
 test('a read error names the edit and the file', () => {
 	assert.throws(
 		() => applyEdits([{ file: 'AGENTS.md', append: 'x' }], () => {
