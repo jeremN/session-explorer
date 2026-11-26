@@ -48,6 +48,7 @@ Merge requests created: 40 in 15 sessions. These sessions cost 350 dollars (35 %
 | `node hook-heartbeat/heartbeat.ts [--json]` | Tell, for each configured hook, when it last fired and whether it looks dead |
 | `node eval-runner/run.ts <spec.json> [--dry-run]` | Run one task under several configurations (see [Eval runner](#eval-runner)) |
 | `node eval-runner/grade.ts <evalDir>` | Grade the diff of each run of an eval (see [Grade the diffs](#grade-the-diffs)) |
+| `node eval-runner/metrics.ts <evalDir>` | Compute the behavior metrics of an eval again (see [Behavior metrics](#behavior-metrics)) |
 | `node --test` | Run the test suite |
 
 All three scripts take `--days N` (default 30, 14 for the heartbeat) and `--projects <regex>`. The regex filters the folder names under `~/.claude/projects`. For example, `--projects 'my-app'` keeps the sessions of every working directory whose path contains `my-app`, worktrees included.
@@ -65,7 +66,8 @@ The configuration file is optional. The tool reads `$SESSION_EXPLORER_CONFIG`, o
     "collections": ["wiki"],
     "wikiDirectories": ["decisions", "playbooks"]
   },
-  "memory": { "collections": ["agent-memory"] }
+  "memory": { "collections": ["agent-memory"] },
+  "commands": { "test": ["^make check\\b"] }
 }
 ```
 
@@ -77,12 +79,13 @@ The configuration file is optional. The tool reads `$SESSION_EXPLORER_CONFIG`, o
 | `brain.collections` | [qmd](https://github.com/tobi/qmd) collections that hold the knowledge base. |
 | `brain.wikiDirectories` | First directories of a qmd path given without its collection. |
 | `memory.collections` | qmd collections that hold agent memory. A read of `~/.claude/projects/*/memory/` always counts as memory. |
+| `commands.test`, `commands.types`, `commands.lint`, `commands.build` | Regular expressions that add to the default patterns of a command class. See [Behavior metrics](#behavior-metrics). |
 
 Without a `brain` section, only an unscoped qmd search counts as a knowledge-base search.
 
 ## Eval runner
 
-`eval-runner/` runs one task under several agent configurations, N times each: Claude Code, Codex or opencode. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result. It shows the pass rate, the share of tests that passed (a 27/28 run is not a 0/28 run), the checks that failed for an infra reason, the runs checked again, the hosts the network filter blocked, and the last verdict of each file that `pnpm eval:watch` follows.
+`eval-runner/` runs one task under several agent configurations, N times each: Claude Code, Codex or opencode. It scores every run with the same pipeline as the viewer, and it runs an acceptance command of your choice. The "Évaluations" view of the viewer shows the result. It shows the pass rate, the share of tests that passed (a 27/28 run is not a 0/28 run), the checks that failed for an infra reason, the runs checked again, the hosts the network filter blocked, the behavior metrics and the steps of each run, and the last verdict of each file that `pnpm eval:watch` follows.
 
 ```sh
 node eval-runner/run.ts eval-runner/examples/format-dollars.json --dry-run   # print the plan and the maximum spend
@@ -113,6 +116,7 @@ One JSON file per eval. Paths in it resolve against the spec directory.
 | `runs` | Runs per configuration, 1 to 20. Default 3. |
 | `configs` | 1 to 8 configurations with unique names. |
 | `graders` | Optional. The graders of every run of the eval. See [Grade the diffs](#grade-the-diffs). |
+| `commands` | Optional `{ test?, types?, lint?, build? }`, each an array of regular expressions. They add to the default patterns of the command classes, and to the patterns of the configuration file. See [Behavior metrics](#behavior-metrics). They are not part of the cache key. |
 
 ### Cache
 
@@ -129,6 +133,46 @@ A grade goes to `eval-runner/out/cache/grades/`. See [Grade the diffs](#grade-th
 - `--spec` takes the acceptance command, the hidden tests and the category of that spec. It must name the same task (same repo, base and prompt). The cached copies of the rechecked runs then go: they belong to the old cache key. Without `--spec`, the cached copies get the new acceptance.
 
 `task.acceptance.infraExitCode` (2 to 255) names the exit code by which the acceptance command says that it failed before it judged the agent, for example a database that did not start. Such a run gets `acceptance.infra`, and the routing table leaves it out.
+
+### Behavior metrics
+
+The pass rate tells you whether a configuration works. The behavior metrics tell you how many turns it took, and why. Each run gets them in `metrics`, and the "Comparaison" panel shows their medians per configuration. The "Runs" panel shows the steps of each run as a band of colored cells, one cell per tool call. The session index (`out/index.json`) has the same counts in the `behavior` field of each session.
+
+**Command classes.** The tool cuts each Bash command into segments at `&&`, `||`, `;`, `|`, `&` and new lines, outside quotes. It removes the body of a heredoc first. Each segment gets classes from its first word, after `cd`, `(`, `do`, `VAR=value` and `timeout N`. A command counts in every class of its segments.
+
+| Class | Default patterns |
+|---|---|
+| `test` | A package script (`npm`, `pnpm`, `yarn`, `bun`) whose name has the word `test`, `tests`, `vitest`, `jest`, `e2e` or `spec`, such as `test:unit`. `vitest`, `jest`, `mocha`, `pytest`, `python -m pytest`, `playwright test`, `node --test`, `cargo test`, `go test`. |
+| `types` | A script whose name has `typecheck`, `type-check`, `types` or `tsc`, such as `check:types`. A script named `check`. `tsc`, `vue-tsc`, `svelte-check`, `mypy`, `pyright`, `cargo check`. |
+| `lint` | A script whose name has `lint` or `prettier`, or starts with `format`. `eslint`, `prettier`, `biome`, `ruff`, `oxlint`, `cargo clippy`, `go vet`. |
+| `build` | A script whose name starts with `build`. `cargo build`, `go build`. |
+| `edit` | `sed -i`, `perl -i`, or a write (`>`, `>>`, `tee`) to a source file (`.ts`, `.js`, `.svelte`, `.json`, `.md` and others). A write under `/tmp` or `/dev` is not an edit. |
+| `install` | `install`, `i`, `ci`, `add`, `remove`, `update` of a package manager, `yarn` alone, `pip install`. |
+| `git` | `git`, with any option. |
+| `explore` | `cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `ls`, `find`, `wc`. A segment after a pipe (`\| tail`) filters the output of the command before it, so it does not explore. |
+| `other` | A command with no class above. |
+
+A runner flag before the script name does not change the class: `pnpm --dir web test:unit`, `pnpm -C web check:types`, `pnpm --filter web lint`, `pnpm exec eslint`, `npx vitest`. The `test`, `types`, `lint` and `build` classes are the verify commands of a [verified task](#what-the-signals-mean).
+
+To add a pattern, set `commands` in the spec or in the configuration file. Each regular expression is tested on every segment, and it adds its class to the segment.
+
+**Steps.** A run has one step per tool call, in order. The tool counts a call once by its `tool_use` id: a transcript can hold the same call twice. A call that a [classifier outage](#what-the-signals-mean) blocked never ran, so it is not a step. `Read`, `Grep`, `Glob` and `LS` are `explore`. `Edit`, `Write`, `MultiEdit` and `NotebookEdit` are `edit`. A Bash call takes its command classes. Any other tool is `other`. A `test` step is also `test-failed` when its result is an error, or when its output has a test failure line: `FAIL `, `×`, `2 failed`, `ℹ fail 1`. A lint or type error in the same output is not a test failure. The band shows the first class of each step in this order: `test-failed`, `test`, `types`, `lint`, `build`, `edit`, `install`, `git`, `explore`, `other`. The `steps` field of a run holds these first classes.
+
+| Metric | Definition |
+|---|---|
+| `toolCalls` | The number of steps. |
+| `explore`, `edits` | The steps with the class `explore`, or `edit`. |
+| `testRuns` | The steps with the class `test`. It includes the failed ones. |
+| `testFailures` | The steps with the class `test-failed`. |
+| `redGreenCycles` | A failed test, then later a test that passes. Several failures before one pass make one cycle. |
+| `typeChecks`, `lintRuns` | The steps with the class `types`, or `lint`. |
+| `lintOnlyAtEnd` | 1 when every lint step comes after the last edit step, or is that step. 0 when a lint step comes before an edit step. Absent when no step lints. The view shows the runs with 1 out of the runs that lint. |
+| `rereads` | A `Read` of a file that the run read before, with no `Edit` or `Write` of that file between the two. A shell edit counts as an edit of every file. |
+| `reruns` | A test, types, lint or build command that the run ran before, with no edit between the two. The commands compare with their spaces folded. |
+| `toolErrors` | The steps whose result is an error. |
+| `firstContextTokens` | The input tokens of the first request of the main agent: fresh input, cache read and cache creation. |
+
+An eval of an older runner has no behavior metrics. `node eval-runner/metrics.ts <evalDir>` (or `pnpm eval:metrics <evalDir>`) computes them from the saved transcripts, with the `commands` of the saved spec. It also adds the `steps` of each run and computes the spreads per configuration again. The other metrics keep their values. A cached run reads the transcript in the eval that ran it. Run the command again after you change the `commands` of a spec. A run that the runner takes from the cache gets its behavior metrics from its saved transcript, with the `commands` of the new spec.
 
 ### Grade the diffs
 
@@ -403,7 +447,7 @@ Under `eval-runner/out/<evalId>/`, which git ignores. `evalId` is the UTC date, 
 
 | Path | Content |
 |---|---|
-| `eval.json` | Spec, base SHA, CLI version, runs with their metrics and grades, and the median, min, max, pass rate and grade counts per configuration. |
+| `eval.json` | Spec, base SHA, CLI version, runs with their metrics, steps and grades, and the median, min, max, pass rate and grade counts per configuration. |
 | `runs/<runId>/claude.json` | The CLI result (Claude Code). |
 | `runs/<runId>/events.jsonl` | The raw JSON events (Codex, opencode). |
 | `runs/<runId>/transcript.jsonl`, `subagents/` | Copy of the transcript. For Codex and opencode, the transcript built from the events. |
@@ -431,7 +475,7 @@ All thresholds are choices, not measured optima. They are constants at the top o
 - **Error loop.** The same failure 3 times or more: same agent, tool and message. Each loop gets a class: `exit_code`, `permission`, `blocked`, `stale_file`, `not_found`, `timeout` or `other`. The cost counts only the requests that launched the repeats, so it is a lower limit.
 - **Retry streak.** The same call (agent, tool, target) after a failure of that call, within the last 8 calls of the agent. It overlaps with error loops: do not add the two rows.
 - **Subagent runs.** Raw cost of each subagent. No verdict on whether it was worth it.
-- **Verified task.** A test, build, lint or typecheck command ran after the last edit of the task: `npm|pnpm|yarn|bun test|build|lint|check|typecheck`, `tsc`, `vitest`, `jest`, `eslint`, `svelte-check`, `playwright test`, `node --test`, `pytest`, `mypy`, `ruff`, `cargo test|check|build|clippy`, `go test|build|vet`. An edit after the check cancels it. `check` gives the result of that last command: `failed` when it exits with an error, or when its output holds a failure line (`FAIL `, `2 failed`, `3 errors`, `error TS2304`), because `| tail` hides the exit code; `passed` otherwise; `unknown` when it has no result (interrupted, still running).
+- **Verified task.** A test, build, lint or typecheck command ran after the last edit of the task: a command of the class `test`, `types`, `lint` or `build` (see [Behavior metrics](#behavior-metrics)), for example `pnpm test`, `pnpm --dir web test:unit`, `pnpm check:types`, `pnpm exec eslint`, `tsc`, `vitest`, `svelte-check`, `playwright test`, `node --test`, `pytest`, `mypy`, `ruff`, `cargo test|check|build|clippy`, `go test|build|vet`. An edit after the check cancels it. `check` gives the result of that last command: `failed` when it exits with an error, or when its output holds a failure line (`FAIL `, `2 failed`, `3 errors`, `error TS2304`), because `| tail` hides the exit code; `passed` otherwise; `unknown` when it has no result (interrupted, still running).
 - **Interruption.** You stopped the agent (`[Request interrupted by user]`).
 - **Refusal.** You refused a tool call (`refusals`), or the permission system denied it (`denials`: auto mode classifier, safety check, permission rule).
 - **Classifier outage.** The auto mode classifier gave no verdict, so the call never ran (`outages`). An outage is not an error of the agent. A check that an outage blocked does not verify the task.
@@ -519,7 +563,7 @@ The hook prices the request with `session-explorer/price.ts`. Any failure ends w
 
 | File | Content |
 |---|---|
-| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, `outages`, task verdicts with `tasks.verified` and `tasks.failed`, `mrs`. Totals of the waste signals. |
+| `out/index.json` | One row per session: cost, tokens, errors, `interrupts`, `refusals`, `denials`, `outages`, task verdicts with `tasks.verified` and `tasks.failed`, `mrs`, the `behavior` metrics. Totals of the waste signals. |
 | `out/sessions/<id>.json` | The event list of one session, for the viewer. |
 | `out/waste.json` | One row per finding. |
 
