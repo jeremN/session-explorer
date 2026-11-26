@@ -287,7 +287,7 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
 <script type="module">
 import { adapt, esc } from './adapt.mjs';
 import { pill, stat, wireSeg } from './ui.mjs';
-import { editsPaths, renderEval, renderEvalOptions, renderWatch } from './evals.mjs';
+import { editsPaths, evalPath, renderCampaign, renderCampaignList, renderEval, renderEvalOptions, renderWatch } from './evals.mjs';
 document.querySelectorAll('.seg').forEach(wireSeg);
 const $=s=>document.querySelector(s);
 const pad=n=>String(n).padStart(2,'0');
@@ -863,7 +863,20 @@ function renderWaste(){
   });
 }
 /* ---------- evals view ---------- */
-let WATCH=null;
+let WATCH=null,CAMPAIGNS=null;
+// The eval.json of an eval folder, and the edits.patch of each config with edits. `id` holds slashes for an eval of a campaign.
+async function fetchEval(id){
+  const base='evals/'+evalPath(id)+'/';
+  const r=await fetch(base+'eval.json');
+  if(!r.ok)throw new Error(r.status);
+  const data=await r.json();
+  // The diff that each config with edits measured. A patch that does not load shows as unreadable.
+  const patches={};
+  await Promise.all(Object.entries(editsPaths(data)).map(async([name,path])=>{
+    try{const p=await fetch(base+path.split('/').map(encodeURIComponent).join('/'));if(p.ok)patches[name]=await p.text()}catch{}
+  }));
+  return {data,patches};
+}
 async function loadEvals(){
   const seq=++evSeq,body=$('#evBody');
   if(!EVALS){
@@ -877,26 +890,45 @@ async function loadEvals(){
   if(WATCH===null){
     try{const r=await fetch('evals/watch/state.json');WATCH=r.ok?renderWatch(await r.json()):''}catch{WATCH=''}
   }
+  // eval:campaign keeps its own index. No campaign: no panel.
+  if(CAMPAIGNS===null){
+    try{const r=await fetch('evals/campaigns/index.json');CAMPAIGNS=r.ok?(await r.json()).campaigns:[]}catch{CAMPAIGNS=[]}
+  }
   if(seq!==evSeq)return;
+  // #evals/campaigns/<id> is a campaign. #evals/campaigns/<id>/<spec> is one eval of it.
+  const parts=(EVAL_ID||'').split('/');
+  if(parts[0]==='campaigns'&&parts[1]){
+    $('#evPick').hidden=true;
+    const back='<p class="wsum"><a href="#evals">← évaluations</a>'+(parts[2]?' · <a href="#evals/campaigns/'+esc(parts[1])+'">← campagne</a>':'')+'</p>';
+    try{
+      let html;
+      if(parts[2]){const {data,patches}=await fetchEval(EVAL_ID);html=renderEval(data,patches)}
+      else{
+        const r=await fetch('evals/campaigns/'+encodeURIComponent(parts[1])+'/campaign.json');
+        if(!r.ok)throw new Error(r.status);
+        html=renderCampaign(await r.json());
+      }
+      if(seq!==evSeq)return;
+      body.innerHTML=back+html;
+    }catch{
+      if(seq!==evSeq)return;
+      body.innerHTML=back+'<p class="wsum">Campagne illisible : evals/'+esc(EVAL_ID)+'</p>';
+    }
+    return;
+  }
+  const campaigns=renderCampaignList(CAMPAIGNS);
   if(!EVALS.length){
     $('#evPick').hidden=true;
-    body.innerHTML=WATCH+'<p class="wsum">Aucune évaluation. Lancez : pnpm eval &lt;spec.json&gt;</p>';
+    body.innerHTML=campaigns+WATCH+'<p class="wsum">Aucune évaluation. Lancez : pnpm eval &lt;spec.json&gt;</p>';
     return;
   }
   const id=EVALS.some(e=>e.id===EVAL_ID)?EVAL_ID:EVALS[0].id;
   $('#evPick').hidden=false;
   $('#evSel').innerHTML=renderEvalOptions(EVALS,id);
   try{
-    const r=await fetch('evals/'+encodeURIComponent(id)+'/eval.json');
-    if(!r.ok)throw new Error(r.status);
-    const data=await r.json();
-    // The diff that each config with edits measured. A patch that does not load shows as unreadable.
-    const patches={};
-    await Promise.all(Object.entries(editsPaths(data)).map(async([name,path])=>{
-      try{const p=await fetch('evals/'+encodeURIComponent(id)+'/'+path.split('/').map(encodeURIComponent).join('/'));if(p.ok)patches[name]=await p.text()}catch{}
-    }));
+    const {data,patches}=await fetchEval(id);
     if(seq!==evSeq)return;
-    body.innerHTML=WATCH+renderEval(data,patches);
+    body.innerHTML=campaigns+WATCH+renderEval(data,patches);
   }catch{
     if(seq!==evSeq)return;
     body.innerHTML='<p class="wsum">Évaluation illisible : evals/'+esc(id)+'/eval.json</p>';
