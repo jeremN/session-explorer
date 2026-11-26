@@ -2,6 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
+import type { CommandPatterns } from '../context-tracer/tracer.ts';
+
 export class SpecError extends Error {
 	exitCode = 2;
 }
@@ -62,6 +64,8 @@ export type Spec = {
 	runs: number;
 	configs: Config[];
 	graders?: Grader[];
+	// Regexes that add to the default command classes of the behavior metrics, and to the verify commands.
+	commands?: CommandPatterns;
 };
 
 // A grader judges the diff of a run after the eval (grade.ts). A command grader is a process that prints its findings
@@ -216,8 +220,18 @@ function gradersOf(value: unknown): Grader[] {
 	});
 }
 
+function commandsOf(value: unknown): CommandPatterns {
+	const commands = object(value, 'spec.commands', ['test', 'types', 'lint', 'build']);
+	const result: CommandPatterns = {};
+	for (const name of ['test', 'types', 'lint', 'build'] as const) {
+		const patterns = optional(commands[name], `spec.commands.${name}`, strings);
+		if (patterns) result[name] = patterns.map((pattern, index) => regex(pattern, `spec.commands.${name}[${index}]`));
+	}
+	return result;
+}
+
 export function validateSpec(raw: unknown, dir: string): Spec {
-	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs', 'graders']);
+	const spec = object(raw, 'spec', ['name', 'task', 'budget', 'runs', 'configs', 'graders', 'commands']);
 	const name = string(spec.name, 'spec.name');
 	if (!/^[a-z0-9-]+$/.test(name)) fail('spec.name', 'must match [a-z0-9-]+');
 
@@ -380,7 +394,8 @@ export function validateSpec(raw: unknown, dir: string): Spec {
 		},
 		runs,
 		configs,
-		...(graders === undefined ? {} : { graders })
+		...(graders === undefined ? {} : { graders }),
+		...(spec.commands === undefined || spec.commands === null ? {} : { commands: commandsOf(spec.commands) })
 	};
 }
 

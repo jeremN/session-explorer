@@ -27,8 +27,21 @@ test('scoreRun gives the metrics of the synthetic transcript', () => {
 		retries: 0,
 		subagentCost: 0,
 		skillLoads: 0,
-		skills: {}
+		skills: {},
+		toolCalls: 3,
+		explore: 1,
+		edits: 1,
+		testRuns: 1,
+		testFailures: 0,
+		redGreenCycles: 0,
+		typeChecks: 0,
+		lintRuns: 0,
+		rereads: 0,
+		reruns: 0,
+		toolErrors: 1,
+		firstContextTokens: 30000
 	});
+	assert.deepEqual(scored.steps, ['edit', 'explore', 'test']);
 	assert.deepEqual(scored.mrs, []);
 	assert.equal(scored.summary.llmRequests, 2);
 	assert.equal(scored.summary.id, ID);
@@ -54,6 +67,15 @@ test('skillLoads counts the Skill tool calls, and skills counts them per skill, 
 	const scored = scoreRun([...entries, call('s1', 'svelte:svelte-code-writer'), call('s2', 'svelte:svelte-code-writer', true), call('s3', 'tdd'), call('s4', 42)], {}, ID)!;
 	assert.equal(scored.metrics.skillLoads, 4);
 	assert.deepEqual(scored.metrics.skills, { 'svelte:svelte-code-writer': 2, tdd: 1, unknown: 1 });
+});
+
+test('the command patterns of a spec add to the default classes', () => {
+	const make = { type: 'assistant', timestamp: '2026-11-13T10:00:40.000Z', sessionId: ID, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_make', name: 'Bash', input: { command: 'make check' } }] } };
+	assert.deepEqual(scoreRun([...entries, make], {}, ID)!.steps.at(-1), 'other');
+	const scored = scoreRun([...entries, make], {}, ID, { test: ['^make check'] })!;
+	assert.deepEqual([scored.steps.at(-1), scored.metrics.testRuns], ['test', 2]);
+	// The patterns hold for one call only.
+	assert.deepEqual(scoreRun([...entries, make], {}, ID)!.steps.at(-1), 'other');
 });
 
 test('an empty transcript gives no score', () => {

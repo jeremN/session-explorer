@@ -1,4 +1,5 @@
 // Aggregates over the runs of one configuration. Pure functions, no file access.
+import type { BehaviorMetrics, StepClass } from '../session-explorer/behavior.ts';
 import type { TestCount } from './testcount.ts';
 
 export type Status = 'ok' | 'timeout' | 'budget' | 'error' | 'skipped';
@@ -17,7 +18,9 @@ export type RunMetrics = {
 	subagentCost: number;
 	skillLoads: number;
 	skills: Record<string, number>;
-};
+	// The behavior counts (session-explorer/behavior.ts). A run of an older eval has none: `pnpm eval:metrics` adds them.
+} & Partial<BehaviorMetrics>;
+export const BEHAVIOR_KEYS = ['toolCalls', 'explore', 'edits', 'testRuns', 'testFailures', 'redGreenCycles', 'typeChecks', 'lintRuns', 'lintOnlyAtEnd', 'rereads', 'reruns', 'toolErrors', 'firstContextTokens'] as const satisfies ReadonlyArray<keyof BehaviorMetrics>;
 export type RunRecord = {
 	id: string;
 	config: string;
@@ -40,6 +43,8 @@ export type RunRecord = {
 	cached?: { evalId: string; id: string };
 	// The grade of each grader of the spec, by grader name (grade.ts).
 	grades?: Record<string, Grade>;
+	// The first class of each tool call, in order (session-explorer/behavior.ts). Class names only, no command text.
+	steps?: StepClass[];
 };
 // `sample`: the index of the sample of the command grader that gave the finding, when the grader has more than one sample.
 export type Finding = { severity: string; summary: string; file?: string; line?: number; rule?: string; sample?: number };
@@ -91,7 +96,8 @@ const PICK: Record<string, (run: RunRecord) => number | undefined> = {
 	skillLoads: (run) => run.metrics?.skillLoads,
 	verified: (run) => run.metrics?.verified,
 	failed: (run) => run.metrics?.failed,
-	lines: (run) => (run.diff ? run.diff.added + run.diff.deleted : undefined)
+	lines: (run) => (run.diff ? run.diff.added + run.diff.deleted : undefined),
+	...Object.fromEntries(BEHAVIOR_KEYS.map((key) => [key, (run: RunRecord) => run.metrics?.[key]]))
 };
 
 export function aggregate(runs: RunRecord[], configs: string[]): Record<string, ConfigStats> {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { classify, configureKnowledge, summarize, traceSession, traceTasks } from './tracer.ts';
+import { classify, commandClasses, configureKnowledge, summarize, traceSession, traceTasks, verifyCommands } from './tracer.ts';
 
 const CONFIG = {
 	brain: {
@@ -276,4 +276,91 @@ test('traceTasks: a check blocked by a classifier outage never ran, so it proves
 		{ verified: true, verifiedAt: at(2), check: 'passed' },
 		{ verified: false, verifiedAt: undefined, check: undefined }
 	]);
+});
+
+test('commandClasses: package scripts, flags and binaries give test, types, lint and build', () => {
+	const cases: Array<[string, string[]]> = [
+		['pnpm --dir applications/web test:unit src/a.test.ts', ['test']],
+		['pnpm -C web check:types', ['types']],
+		['pnpm exec eslint src/a.ts', ['lint']],
+		['pnpm --filter web lint', ['lint']],
+		['pnpm -r build', ['build']],
+		['npm run typecheck', ['types']],
+		['yarn workspace web test', ['test']],
+		['npx vitest run a.test.ts', ['test']],
+		['npx playwright test', ['test']],
+		['./node_modules/.bin/tsc --noEmit', ['types']],
+		['CI=1 timeout 120 pnpm test', ['test']],
+		['node --experimental-strip-types --test a.test.ts', ['test']],
+		['npx prettier --check .', ['lint']],
+		['cargo clippy', ['lint']],
+		['go vet ./...', ['lint']],
+		['python -m pytest -q', ['test']],
+		['mypy src', ['types']]
+	];
+	for (const [command, expected] of cases) assert.deepEqual(commandClasses(command), expected, command);
+});
+
+test('commandClasses: one call counts in every class of its segments', () => {
+	assert.deepEqual(commandClasses('pnpm test && pnpm check:types; pnpm lint'), ['test', 'types', 'lint']);
+	assert.deepEqual(commandClasses('cd web && pnpm test 2>&1 | tail -30'), ['test']);
+	assert.deepEqual(commandClasses('(cd web && pnpm build) || echo no'), ['build']);
+	assert.deepEqual(commandClasses('for f in a b; do pnpm test $f; done'), ['test']);
+});
+
+test('commandClasses: git, install, explore and other', () => {
+	assert.deepEqual(commandClasses('git -C repo status && git diff'), ['git']);
+	assert.deepEqual(commandClasses('pnpm install --frozen-lockfile'), ['install']);
+	assert.deepEqual(commandClasses('npm ci'), ['install']);
+	assert.deepEqual(commandClasses('ls src && cat a.ts'), ['explore']);
+	assert.deepEqual(commandClasses("sed -n '1,20p' a.ts"), ['explore']);
+	assert.deepEqual(commandClasses('find . -name "*.ts" | xargs grep -l x | wc -l'), ['explore']);
+	assert.deepEqual(commandClasses('echo test'), ['other']);
+	assert.deepEqual(commandClasses('cd web'), ['other']);
+	assert.deepEqual(commandClasses('test -f a.ts && echo yes'), ['other']);
+});
+
+test('commandClasses: a pipe filter is not an exploration, and quotes do not split', () => {
+	assert.deepEqual(commandClasses('git log --oneline | head -5'), ['git']);
+	assert.deepEqual(commandClasses('grep -E "a|b;c" src/a.ts'), ['explore']);
+	assert.deepEqual(commandClasses("git commit -m 'fix; pnpm test && done'"), ['git']);
+	assert.deepEqual(commandClasses('echo "pnpm test"'), ['other']);
+});
+
+test('commandClasses: in-place edits and writes to a source file are edits; a log file is not', () => {
+	assert.deepEqual(commandClasses("sed -i '' 's/a/b/' src/a.ts && pnpm test"), ['edit', 'test']);
+	assert.deepEqual(commandClasses("cat > src/a.ts <<'EOF'\npnpm test | grep x\nEOF"), ['edit']);
+	assert.deepEqual(commandClasses('echo x | tee src/b.svelte'), ['edit']);
+	assert.deepEqual(commandClasses('pnpm lint > /tmp/lint.log 2>&1'), ['lint']);
+	assert.deepEqual(commandClasses('pnpm test 2>/dev/null'), ['test']);
+	assert.deepEqual(commandClasses('pnpm test > out.txt'), ['test']);
+});
+
+test('commandClasses: a heredoc redirect writes, a command substitution runs, and an in-place edit of a plan file is no edit', () => {
+	assert.deepEqual(commandClasses("cat <<'EOF' > src/a.ts\nconst a = 1;\nEOF\npnpm test"), ['edit', 'test']);
+	assert.deepEqual(commandClasses('OUT=$(pnpm test 2>&1); echo "$OUT" | tail'), ['test']);
+	assert.deepEqual(commandClasses("sed -i '' 's/a/b/' ~/.claude/handoffs/x/PLAN.md"), ['other']);
+});
+
+test('verifyCommands: the check segments without their pipes and redirections', () => {
+	assert.deepEqual(verifyCommands('cd web && pnpm  test 2>&1 | tail -5'), ['pnpm test']);
+	assert.deepEqual(verifyCommands('pnpm lint > /tmp/lint.log; pnpm check:types | grep error'), ['pnpm lint', 'pnpm check:types']);
+	assert.deepEqual(verifyCommands('git status && ls'), []);
+});
+
+test('commandClasses: extra patterns from the config add to the defaults', () => {
+	configureKnowledge({ ...CONFIG, commands: { test: ['^make check\\b'], lint: ['\\bstylelint\\b'] } });
+	try {
+		assert.deepEqual(commandClasses('make check && npx stylelint a.css'), ['test', 'lint']);
+		assert.deepEqual(commandClasses('pnpm test'), ['test']);
+		assert.equal(classify('Bash', { command: 'make check' }), 'verify');
+	} finally {
+		configureKnowledge(CONFIG);
+	}
+	assert.deepEqual(commandClasses('make check'), ['other']);
+});
+
+test('a script run with pnpm flags or a check:types script is a verify event', () => {
+	for (const command of ['pnpm --dir web test:unit a.test.ts', 'pnpm -r check:types', 'pnpm exec eslint .'])
+		assert.equal(classify('Bash', { command }), 'verify', command);
 });

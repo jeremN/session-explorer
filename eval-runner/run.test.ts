@@ -99,6 +99,8 @@ test('a normal eval writes eval.json, the run files and the index, and leaves no
 		assert.equal(run.acceptance.passed, true);
 		assert.deepEqual(run.diff, { files: 1, added: 1, deleted: 0 });
 		assert.equal(run.metrics.cost, 0.11);
+		assert.equal(run.metrics.toolCalls, 3);
+		assert.deepEqual(run.steps, ['edit', 'explore', 'test']);
 		assert.deepEqual(run.mrs, []);
 		for (const file of ['claude.json', 'transcript.jsonl', 'session.json', 'diff.patch', 'acceptance.log', 'mcp.json']) assert.ok(existsSync(join(dir, 'runs', run.id, file)), `${run.id}/${file}`);
 	}
@@ -201,6 +203,15 @@ test('a second eval reuses the finished runs, a changed config runs again, and -
 	const out = join(root, 'out-cache');
 	const first = await cli([writeSpec('cache', { runs: 1 }), '--claude', FAKE, '--out', out]);
 	assert.equal(first.code, 0, first.stderr);
+	// A cache entry of an older runner has no behavior counts: the reused run gets them from its saved transcript.
+	for (const file of readdirSync(join(out, 'cache')).filter((name) => name.endsWith('.jsonl'))) {
+		const lines = readFileSync(join(out, 'cache', file), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+		for (const entry of lines) {
+			delete entry.record.steps;
+			delete entry.record.metrics.toolCalls;
+		}
+		writeFileSync(join(out, 'cache', file), lines.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+	}
 	const second = await cli([writeSpec('cache', { runs: 1 }), '--claude', FAKE, '--out', out]);
 	assert.equal(second.code, 0, second.stderr);
 	const latest = () => JSON.parse(readFileSync(join(out, readdirSync(out).filter((name) => name !== 'index.json' && name !== 'cache').sort().at(-1)!, 'eval.json'), 'utf8'));
@@ -208,6 +219,8 @@ test('a second eval reuses the finished runs, a changed config runs again, and -
 	assert.deepEqual(reused.runs.map((run: { id: string; cached?: unknown }) => [run.id, Boolean(run.cached)]), [['baseline-1', true], ['terse-1', true]]);
 	assert.equal(reused.spent, 0);
 	assert.equal(reused.configs[0].pass.passed, 1);
+	assert.deepEqual(reused.runs.map((run: { steps?: string[]; metrics: { toolCalls?: number } }) => [run.steps, run.metrics.toolCalls]), [[['edit', 'explore', 'test'], 3], [['edit', 'explore', 'test'], 3]]);
+	assert.equal(reused.configs[0].metrics.toolCalls.median, 3);
 
 	await new Promise((wake) => setTimeout(wake, 1100));
 	const changed = await cli([writeSpec('cache', { runs: 1, configs: [{ name: 'baseline', model: 'sonnet' }, { name: 'terse', claudeMd: { text: 'Be brief.\n' } }] }), '--claude', FAKE, '--out', out]);

@@ -155,3 +155,37 @@ test('the comparison has one row per grader: the runs with findings out of the g
 	assert.match(other[2], /—/);
 });
 
+test('a run with steps shows one band cell per step, by its class, and the panel has one legend', () => {
+	const html = renderRuns({
+		runs: [run('a-1', 'a', { steps: ['explore', 'edit', 'test-failed', 'edit', 'test'] }), run('a-2', 'a', { steps: ['lint', '<script>'] }), run('a-3', 'a')]
+	});
+	const band = html.split('<span class="ev-band"')[1].split('</span>')[0];
+	assert.deepEqual([...band.matchAll(/data-step="([^"]+)"/g)].map((match) => match[1]), ['explore', 'edit', 'test-failed', 'edit', 'test']);
+	assert.match(html, /aria-label="5 étapes"/);
+	// An unknown class is drawn as other, never as markup.
+	assert.doesNotMatch(html, /<script>/);
+	assert.match(html.split('<span class="ev-band"')[2], /data-step="lint".*data-step="other"/);
+	// The legend names the classes of the panel, once.
+	assert.equal(html.match(/class="ev-legend"/g)?.length, 1);
+	for (const label of ['exploration', 'édition', 'test en échec', 'lint', 'autre']) assert.match(html.split('class="ev-legend"')[1], new RegExp(label));
+	assert.doesNotMatch(html.split('class="ev-legend"')[1], /installation/);
+	// A run of an older eval has no steps.
+	assert.match(html.split('<td>a-3</td>')[1].split('</tr>')[0], /<td>—<\/td>/);
+	assert.doesNotMatch(renderRuns({ runs: [run('b-1', 'b')] }), /ev-legend/);
+});
+
+test('the comparison shows the medians of the behavior metrics and the runs that lint only at the end', () => {
+	const data = sample();
+	Object.assign(data.configs[0].metrics, { toolCalls: spread([6, 7, 9]), testFailures: spread([0, 1, 0]), firstContextTokens: spread([22000, 23000, 24000]), lintOnlyAtEnd: spread([1, 0]) });
+	Object.assign(data.configs[1].metrics, { toolCalls: spread([10, 11, 12]), testFailures: spread([1, 1, 2]), firstContextTokens: spread([32000, 32000, 33000]), lintOnlyAtEnd: spread([1, 1, 1]) });
+	const html = renderEval(data);
+	const cells = (label: string) => html.split(`<th scope="row">${label}</th>`)[1].split('</tr>')[0].split('<td');
+	assert.match(cells('Appels d’outils')[1], /data-best[^>]*><span class="ev-med">7</);
+	assert.match(cells('Tests en échec')[1], /data-best/);
+	assert.match(cells('Contexte initial')[2], /32\.0k/);
+	assert.match(cells('Lint seulement à la fin')[1], />1\/2</);
+	assert.match(cells('Lint seulement à la fin')[2], />3\/3</);
+	// An eval without the behavior metrics has none of these rows.
+	assert.doesNotMatch(renderEval(sample()), /Appels d’outils|Lint seulement/);
+});
+

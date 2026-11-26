@@ -17,7 +17,7 @@ import { HOME, OPENCODE_KEY_ENVS, WORK, allowedHosts, blockedTargets, containerH
 import type { Network } from './container.ts';
 import { realExec } from './exec.ts';
 import type { Exec } from './exec.ts';
-import { scoreFiles, scoreRun } from './score.ts';
+import { behaviorFiles, scoreFiles, scoreRun } from './score.ts';
 import { SpecError, loadSpec } from './spec.ts';
 import type { AgentName, Config, Spec } from './spec.ts';
 import { gradeRuns } from './grade.ts';
@@ -196,13 +196,13 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		let scored: ReturnType<typeof scoreRun>;
 		if (outcome.entries) {
 			writeFileSync(join(runDir, 'transcript.jsonl'), outcome.entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
-			scored = scoreRun(outcome.entries, {}, sessionId);
+			scored = scoreRun(outcome.entries, {}, sessionId, spec.commands);
 			// The agent prices its own requests (opencode), or the config gives the price (codex). A run with no price has no cost.
 			if (scored && record.cliCostUsd !== null) scored.metrics.cost = record.cliCostUsd;
 			else if (scored) delete (scored.metrics as Partial<typeof scored.metrics>).cost;
 		} else {
 			const transcript = findTranscript(sessionId);
-			scored = transcript && scoreFiles(transcript, sessionId);
+			scored = transcript && scoreFiles(transcript, sessionId, spec.commands);
 			if (transcript) {
 				cpSync(transcript, join(runDir, 'transcript.jsonl'));
 				const subagents = join(transcript.slice(0, -'.jsonl'.length), 'subagents');
@@ -212,6 +212,7 @@ async function runOne({ exec, spec, options, baseSha, evalId, evalDir, image, op
 		if (scored) {
 			writeFileSync(join(runDir, 'session.json'), JSON.stringify(scored.session));
 			record.metrics = scored.metrics;
+			record.steps = scored.steps;
 			record.mrs = scored.mrs;
 			if (scored.mrs.length > 0) console.error(`${planned.id}: the agent created ${scored.mrs.length} merge request(s). The clone has no remote, so check the run.`);
 		} else {
@@ -317,6 +318,14 @@ export async function runEval(argv: string[], exec: Exec = realExec): Promise<{ 
 	const cached = Object.fromEntries(spec.configs.map((config) => [config.name, options.noCache || versionOf(config) === 'unknown' ? [] : readCache(cacheDir, keys[config.name]).slice(-spec.runs)]));
 	// A reused run carries no grade: recheck.ts copies a graded record into the cache, and the graders of this spec grade it again.
 	const reused: RunRecord[] = spec.configs.flatMap((config) => cached[config.name].map(({ evalId: from, record: { grades: _grades, ...record } }, index) => ({ ...record, id: `${config.name}-${index + 1}`, config: config.name, cached: { evalId: from, id: record.cached?.id ?? record.id } })));
+	// The behavior counts of a reused run come from its saved transcript, with the command patterns of this spec.
+	for (const record of reused) {
+		const transcript = join(options.out, record.cached!.evalId, 'runs', record.cached!.id, 'transcript.jsonl');
+		if (!record.metrics || !existsSync(transcript)) continue;
+		const behavior = behaviorFiles(transcript, spec.commands);
+		Object.assign(record.metrics, behavior.metrics);
+		record.steps = behavior.steps;
+	}
 	const planned = planRuns(spec.configs, spec.runs, Object.fromEntries(spec.configs.map((config) => [config.name, cached[config.name].length])));
 	const maxSpend = Math.min(planned.length * spec.budget.perRunUsd, spec.budget.perEvalUsd);
 

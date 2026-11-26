@@ -97,3 +97,13 @@ test('a grade with flagged counts as a run with findings by its flag; an old gra
 	];
 	assert.deepEqual(aggregate(runs, ['a']).a.grades, { review: { graded: 4, withFindings: 2, findings: 4, bySeverity: { minor: 4 } } });
 });
+
+test('aggregate spreads the behavior metrics, and a run of an older eval without them is left out of their spread', () => {
+	const fresh = { ...run('a', 'ok', 1, true), steps: ['explore', 'edit', 'test'] as RunRecord['steps'] };
+	fresh.metrics = { ...fresh.metrics!, toolCalls: 3, testFailures: 1, lintOnlyAtEnd: 1, firstContextTokens: 20000 };
+	const old = run('a', 'ok', 2, true);
+	const stats = aggregate([fresh, old], ['a']).a.metrics;
+	assert.deepEqual([stats.toolCalls.values, stats.testFailures.values, stats.lintOnlyAtEnd.values, stats.firstContextTokens.median], [[3], [1], [1], 20000]);
+	assert.equal(stats.cost.n, 2);
+	assert.equal('rereads' in stats, false);
+});

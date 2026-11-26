@@ -7,6 +7,8 @@ import { basename, extname, join, resolve, sep } from 'node:path';
 
 import { listJsonl, loadConfig, readLines, traceTasks } from '../context-tracer/tracer.ts';
 import type { TaskSpan } from '../context-tracer/tracer.ts';
+import { behaviorOf } from './behavior.ts';
+import type { BehaviorMetrics } from './behavior.ts';
 import { parseSession } from './parse.ts';
 import type { AgentMeta, ParsedSession, SessionEvent } from './parse.ts';
 import { RATES, costOf, modelKey } from './price.ts';
@@ -28,7 +30,8 @@ export function priceEvents(events: SessionEvent[], rates: Record<string, Rate> 
 	return events.map((event) => (event.kind === 'llm' && event.tok ? { ...event, cost: costOf(event.model ?? '', event.tok, rates) } : event));
 }
 
-export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain' | 'verified' | 'check'>>) {
+// `behavior`: the counts of behavior.ts. The parsed events hold no full command, so the caller computes them from the rows.
+export function summarizeSession(id: string, project: string, parsed: ParsedSession, tasks: Array<Pick<TaskSpan, 'brain' | 'verified' | 'check'>>, behavior?: BehaviorMetrics) {
 	const requests = parsed.events.filter((event) => event.kind === 'llm' && event.tok);
 	const sum = (pick: (event: SessionEvent) => number) => requests.reduce((total, event) => total + pick(event), 0);
 	const fresh = sum((event) => event.tok!.fresh);
@@ -58,7 +61,8 @@ export function summarizeSession(id: string, project: string, parsed: ParsedSess
 		outages: count((event) => event.refusal === 'outage'),
 		subagents: parsed.agents.length,
 		tasks: { before: verdicts('before'), after: verdicts('after'), never: verdicts('never'), verified: tasks.filter((task) => task.verified).length, failed: tasks.filter((task) => task.check === 'failed').length },
-		mrs: [] as string[]
+		mrs: [] as string[],
+		...(behavior ? { behavior } : {})
 	};
 }
 
@@ -164,7 +168,7 @@ function main() {
 			for (const event of parsed.events) if (event.kind === 'llm' && event.cost === null) unpriced.add(modelKey(event.model ?? ''));
 			const { tasks } = traceTasks(entries);
 			const id = basename(file, '.jsonl');
-			rows.push(summarizeSession(id, project, parsed, tasks));
+			rows.push(summarizeSession(id, project, parsed, tasks, behaviorOf(entries).metrics));
 			mentions.push({ session: id, mentions: mrMentions(entries) });
 			wasted.push({ session: id, project, title: parsed.title, start: parsed.start, ...findWaste(parsed.events, parsed.agents) });
 			writeFileSync(join(outDir, 'sessions', `${id}.json`), JSON.stringify({ id, title: parsed.title, agents: parsed.agents, events: parsed.events, tasks }));

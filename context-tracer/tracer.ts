@@ -19,7 +19,18 @@ export type Config = {
 	projects?: string;
 	brain?: { paths?: string[]; repositories?: string[]; collections?: string[]; wikiDirectories?: string[] };
 	memory?: { collections?: string[] };
+	commands?: CommandPatterns;
 };
+// Regular expressions that add to the default patterns of a command class. Each one is tested on every segment of a shell call.
+export type CommandPatterns = { test?: string[]; types?: string[]; lint?: string[]; build?: string[] };
+export function mergeCommands(...sources: Array<CommandPatterns | undefined>): CommandPatterns {
+	const merged: CommandPatterns = {};
+	for (const name of ['test', 'types', 'lint', 'build'] as const) {
+		const patterns = sources.flatMap((source) => source?.[name] ?? []);
+		if (patterns.length) merged[name] = patterns;
+	}
+	return merged;
+}
 const NEVER = /(?!)/;
 const anyOf = (patterns: string[]) => (patterns.length === 0 ? NEVER : new RegExp(patterns.join('|')));
 function compile(config: Config) {
@@ -33,6 +44,12 @@ function compile(config: Config) {
 		// qmd accepts a path without its collection. The first directory then names the brain wiki.
 		brainWikiDirectories: new Set(config.brain?.wikiDirectories ?? []),
 		memoryCollections: new Set(config.memory?.collections ?? []),
+		commands: {
+			test: (config.commands?.test ?? []).map((pattern) => new RegExp(pattern)),
+			types: (config.commands?.types ?? []).map((pattern) => new RegExp(pattern)),
+			lint: (config.commands?.lint ?? []).map((pattern) => new RegExp(pattern)),
+			build: (config.commands?.build ?? []).map((pattern) => new RegExp(pattern))
+		},
 		// The home `.claude` holds plans and memory. A repository `.claude/worktrees` holds code.
 		// An edit in a brain repository writes the brain. It is not a task that should search it.
 		// A clone of the eval runner sits under /tmp on Linux (os.tmpdir()). It is a repository, not a scratch file.
@@ -58,27 +75,161 @@ const HEREDOC = /<<-?\s*["']?(\w+)["']?[\s\S]*?(?:\n\1(?=\s|$)|$)/g;
 const SHELL_READER = /(?:^|\|)\s*(?:grep|rg|cat)\b/;
 const SHELL_IN_PLACE = /\bsed\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*i(?=[\s.']|$)|\bperl\s+(?:-\S+\s+)*-[a-zA-Z0-9]*i(?=[\s.]|$)/;
 
-// A statement that starts with one of these commands checks the code. Leading `VAR=value` assignments are skipped.
-const VERIFY = new RegExp(
-	'^(?:\\w+=\\S*\\s+)*(?:' +
-		[
-			'(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:test|build|lint|check|typecheck|type-check)\\b',
-			'(?:npx|bunx|pnpm\\s+exec|pnpm|yarn)\\s+(?:tsc|vitest|jest|eslint|svelte-check|playwright\\s+test)\\b',
-			'(?:tsc|vitest|jest|eslint|pytest|mypy|ruff)\\b',
-			'node\\s+--test\\b',
-			'cargo\\s+(?:test|check|build|clippy)\\b',
-			'go\\s+(?:test|build|vet)\\b'
-		].join('|') +
-		')'
-);
+// Command classes of a shell call. The call is cut into segments at `&&`, `||`, `;`, `|`, `&` and new lines, outside
+// quotes. Each segment gets classes, and the call counts in every class of its segments, in the order they come.
+// A call with no class is `other`. A test, types, lint or build segment checks the code: it is a verify event.
+export const COMMAND_CLASSES = ['test', 'types', 'lint', 'build', 'edit', 'install', 'git', 'explore', 'other'] as const;
+export type CommandClass = (typeof COMMAND_CLASSES)[number];
+const VERIFY_CLASSES: ReadonlySet<CommandClass> = new Set(['test', 'types', 'lint', 'build']);
+export const isVerifyClass = (name: string) => VERIFY_CLASSES.has(name as CommandClass);
+
+type Segment = { text: string; piped: boolean };
+// `piped`: the segment reads the output of the segment before it.
+function segmentsOf(command: string): Segment[] {
+	const segments: Segment[] = [];
+	let current = '';
+	let quote = '';
+	let piped = false;
+	const cut = (next: boolean) => {
+		if (current.trim()) segments.push({ text: current.trim(), piped });
+		current = '';
+		piped = next;
+	};
+	for (let index = 0; index < command.length; index++) {
+		const char = command[index];
+		const next = command[index + 1];
+		if (char === '\\') {
+			current += char + (next ?? '');
+			index++;
+		} else if (quote) {
+			if (char === quote) quote = '';
+			current += char;
+		} else if (char === "'" || char === '"') {
+			quote = char;
+			current += char;
+		} else if ((char === '&' || char === '|') && next === char) {
+			cut(false);
+			index++;
+		} else if (char === '|') {
+			if (next === '&') index++;
+			cut(true);
+		} else if (char === ';' || char === '\n' || (char === '&' && !/[<>]/.test(command[index - 1] ?? '') && next !== '>')) {
+			cut(false);
+		} else {
+			current += char;
+		}
+	}
+	cut(false);
+	return segments;
+}
+
+// Words before the command itself: a subshell, a loop body, a variable, a time limit.
+const COMMAND_PREFIX = /^(?:[({!]\s*|(?:do|then|else|time|env|nohup|exec)\s+|\w+=\$\(\s*|\w+=\S*\s+|timeout\s+(?:-\S+\s+)*\d\S*\s+)/;
+const QUOTED = /'[^']*'|"(?:\\.|[^"\\])*"/g;
+const RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx']);
+const VALUE_FLAGS = new Set(['--dir', '-C', '--filter', '-F', '--prefix', '--workspace', '--cwd', '--config']);
+const INSTALL_SCRIPTS = new Set(['install', 'i', 'ci', 'add', 'remove', 'rm', 'uninstall', 'update', 'up']);
+const EXPLORERS = new Set(['cat', 'head', 'tail', 'grep', 'rg', 'ls', 'find', 'wc']);
+// A write to a source file. A log under /tmp or /dev is not an edit, but a clone of the eval runner under /tmp is.
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|svelte|vue|json|md|css|scss|html|ya?ml|py|go|rs|toml)$/;
+const SCRATCH = /^(?:\/dev\/|(?:\/private)?\/tmp\/(?!(?:\S*\/)?eval-runner\/)|\$\{?TMPDIR)/;
+const WRITE_TARGET = /(?:^|[^<>&\d])>>?\s*(?!&)([^\s;&|<>()]+)|\btee\s+(?:-\S+\s+)*([^\s;&|<>()]+)/g;
+
+function binaryClasses(name: string, rest: string[]): CommandClass[] {
+	if (['vitest', 'jest', 'mocha', 'pytest'].includes(name)) return ['test'];
+	if (name === 'playwright' && rest[0] === 'test') return ['test'];
+	if (name === 'node' && rest.includes('--test')) return ['test'];
+	if (/^python3?$/.test(name) && rest[0] === '-m' && rest[1] === 'pytest') return ['test'];
+	if (['tsc', 'vue-tsc', 'svelte-check', 'mypy', 'pyright'].includes(name)) return ['types'];
+	if (['eslint', 'prettier', 'biome', 'ruff', 'oxlint'].includes(name)) return ['lint'];
+	const sub = { cargo: { test: 'test', check: 'types', build: 'build', clippy: 'lint' }, go: { test: 'test', build: 'build', vet: 'lint' } } as Record<string, Record<string, CommandClass>>;
+	const found = sub[name]?.[rest[0]];
+	if (found) return [found];
+	if (/^pip3?$/.test(name) && rest[0] === 'install') return ['install'];
+	return [];
+}
+
+// The name of a package script: `test:unit`, `check:types`, `lint:fix`, `build`.
+function scriptClasses(name: string): CommandClass[] {
+	const classes: CommandClass[] = [];
+	if (/(?:^|[:_-])(?:tests?|vitest|jest|e2e|spec)(?:$|[:_-])/.test(name)) classes.push('test');
+	if (/typecheck|type-check|(?:^|[:_-])types?(?:$|[:_-])|(?:^|[:_-])tsc$|svelte-check/.test(name)) classes.push('types');
+	if (/lint|prettier|^format/.test(name)) classes.push('lint');
+	if (/^build(?:$|[:_-])/.test(name)) classes.push('build');
+	// `check` alone is the type check of SvelteKit and of most templates.
+	if (classes.length === 0 && /^check(?:$|:)/.test(name)) classes.push('types');
+	return classes;
+}
+
+function runnerClasses(runner: string, rest: string[]): CommandClass[] {
+	let index = 0;
+	while (index < rest.length && rest[index].startsWith('-')) index += VALUE_FLAGS.has(rest[index]) || (runner === 'npm' && rest[index] === '-w') ? 2 : 1;
+	if (runner === 'yarn' && rest[index] === 'workspace') index += 2;
+	let binary = runner === 'npx' || runner === 'bunx';
+	if (['exec', 'dlx', 'x'].includes(rest[index])) {
+		binary = true;
+		index++;
+	} else if (rest[index] === 'run') index++;
+	const name = rest[index];
+	if (name === undefined) return runner === 'yarn' ? ['install'] : [];
+	const after = rest.slice(index + 1);
+	if (binary) return binaryClasses(name, after);
+	if (INSTALL_SCRIPTS.has(name)) return ['install'];
+	const found = binaryClasses(name, after);
+	return found.length ? found : scriptClasses(name);
+}
+
+function writesSource(bare: string) {
+	return [...bare.matchAll(WRITE_TARGET)].some((match) => {
+		const target = match[1] ?? match[2];
+		return SOURCE_FILE.test(target) && !SCRATCH.test(target) && !knowledge.shellNotARepository.test(target);
+	});
+}
+
+function segmentClasses({ text: raw, piped }: Segment): { text: string; classes: CommandClass[] } {
+	let text = raw;
+	for (let previous = ''; previous !== text; ) {
+		previous = text;
+		text = text.replace(COMMAND_PREFIX, '').replace(/\s*[)}]+\s*$/, '');
+	}
+	const classes: CommandClass[] = [];
+	for (const name of ['test', 'types', 'lint', 'build'] as const) if (knowledge.commands[name].some((pattern) => pattern.test(text))) classes.push(name);
+	const bare = text.replace(QUOTED, "''");
+	const [head = '', ...rest] = bare.split(/\s+/);
+	const name = head.replace(/^.*\//, '');
+	classes.push(...(RUNNERS.has(name) ? runnerClasses(name, rest) : binaryClasses(name, rest)));
+	if (name === 'git') classes.push('git');
+	if ((SHELL_IN_PLACE.test(bare) && !knowledge.shellNotARepository.test(bare)) || writesSource(bare)) classes.push('edit');
+	else if (!piped && (EXPLORERS.has(name) || (name === 'sed' && rest.includes('-n')))) classes.push('explore');
+	return { text, classes };
+}
+
+// The body of a heredoc is text, not commands. The rest of its first line stays: `cat <<'EOF' > a.ts` writes a.ts.
+const classifiedSegments = (command: string) =>
+	segmentsOf(command.replace(HEREDOC, (heredoc) => heredoc.split('\n')[0].replace(/^<<-?\s*["']?\w+["']?/, ''))).map(segmentClasses);
+
+export function commandClasses(command: string): CommandClass[] {
+	const classes = new Set(classifiedSegments(command).flatMap((segment) => segment.classes));
+	return classes.size ? [...classes] : ['other'];
+}
+
+// The test, types, lint and build segments of a command, without their redirections and with their spaces folded.
+// `pnpm test | tail -5` and `pnpm test 2>&1 | grep FAIL` give the same check: `pnpm test`.
+export function verifyCommands(command: string): string[] {
+	return classifiedSegments(command)
+		.filter((segment) => segment.classes.some(isVerifyClass))
+		.map((segment) => segment.text.replace(/\s*\d*>>?&?\s*\S+/g, '').replace(/\s+/g, ' ').trim());
+}
 
 // A check can exit with 0 and still fail: `pnpm test | tail` returns the exit code of `tail`. These lines report a failure.
 // The auto mode classifier had no answer, so the call never ran. Its result is not an outcome of the command.
 export const OUTAGE = /^The server-side auto mode classifier gave no verdict/;
-const FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing|errors?)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]|\berror TS\d{4}\b/;
+// TEST_FAILURE: the lines of a test runner only. A lint or type error is a failure of the check, not of a test.
+export const TEST_FAILURE = /(?:^|\n)\s*(?:FAIL|✗|×)\s|\b[1-9]\d*\s+(?:failed|failing)\b|(?:^|\n)\s*(?:# fail|ℹ fail)\s+[1-9]/;
+export const FAILURE = new RegExp(`${TEST_FAILURE.source}|\\b[1-9]\\d*\\s+errors?\\b|\\berror TS\\d{4}\\b`);
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
-const resultText = (content: unknown) =>
+export const resultText = (content: unknown) =>
 	typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => text(block?.text)).join('\n') : '';
 
 function knowledgeSource(collections: string[]): EventKind | undefined {
@@ -102,7 +253,7 @@ function classifyShell(rawCommand: string): EventKind | undefined {
 	if (shellReads(statements, knowledge.brainPath)) return 'brain';
 	if (shellReads(statements, MEMORY_PATH)) return 'memory';
 	if (SHELL_IN_PLACE.test(command) && !knowledge.shellNotARepository.test(command)) return 'edit';
-	return statements.some((statement) => VERIFY.test(statement)) ? 'verify' : undefined;
+	return commandClasses(command).some(isVerifyClass) ? 'verify' : undefined;
 }
 
 export function classify(name: string, input: Record<string, unknown>): EventKind | undefined {

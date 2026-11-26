@@ -148,6 +148,21 @@ summary{cursor:pointer;font:500 12px var(--font-mono);letter-spacing:.04em;color
 .ev-range{color:var(--muted);margin-inline-start:4px}
 .ev-dots{display:block;margin-top:4px}
 .ev-runs a{color:var(--s1)}
+/* Step band of a run: one cell per tool call, coloured by its first class. The legend names the colours. */
+.ev-band{display:flex;flex-wrap:wrap;gap:1px;max-width:260px}
+.ev-band i,.ev-legend i{display:inline-block;flex:none;width:6px;height:12px;border-radius:1px;background:var(--step)}
+.ev-legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin:10px 0 0;font:400 11px var(--font-mono);color:var(--muted)}
+.ev-legend span{display:inline-flex;align-items:center;gap:5px}
+[data-step]{--step:color-mix(in oklab,var(--muted) 45%,transparent)}
+[data-step="explore"]{--step:var(--axis)}
+[data-step="edit"]{--step:var(--s1)}
+[data-step="test"]{--step:var(--positive)}
+[data-step="test-failed"]{--step:var(--crit)}
+[data-step="types"]{--step:var(--warning)}
+[data-step="lint"]{--step:var(--s2)}
+[data-step="build"]{--step:var(--s3)}
+[data-step="install"]{--step:var(--muted)}
+[data-step="git"]{--step:var(--ink2)}
 @media (max-width:1000px){.topgrid{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:900px){
   .picker{flex-basis:100%;max-width:none}

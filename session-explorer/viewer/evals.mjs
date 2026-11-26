@@ -21,6 +21,19 @@ const ROWS = [
 	['skillLoads', 'Skills chargés', dec, null],
 	['verified', 'Tâches vérifiées', dec, 'high'],
 	['failed', 'Vérifs en échec', dec, 'low'],
+	// The behavior metrics (session-explorer/behavior.ts). An eval of an older runner has none, so the rows stay hidden.
+	['toolCalls', 'Appels d’outils', dec, 'low'],
+	['explore', 'Explorations', dec, null],
+	['edits', 'Éditions', dec, null],
+	['testRuns', 'Tests lancés', dec, null],
+	['testFailures', 'Tests en échec', dec, 'low'],
+	['redGreenCycles', 'Cycles rouge-vert', dec, null],
+	['typeChecks', 'Vérifs de types', dec, null],
+	['lintRuns', 'Lints lancés', dec, null],
+	['rereads', 'Relectures', dec, 'low'],
+	['reruns', 'Vérifs répétées', dec, 'low'],
+	['toolErrors', 'Erreurs d’outils', dec, 'low'],
+	['firstContextTokens', 'Contexte initial', kfmt, 'low'],
 	['lines', 'Lignes modifiées', (n) => String(Math.round(n)), null],
 	['cacheReadShare', 'Lecture cache', (n) => Math.round(n * 100) + ' %', 'high']
 ];
@@ -31,6 +44,20 @@ const STATUS = {
 	error: ['erreur', 'negative'],
 	skipped: ['ignoré', 'neutral']
 };
+// The classes of a step, in the order of the legend. A class outside this list is drawn as other.
+const STEPS = {
+	explore: 'exploration',
+	edit: 'édition',
+	test: 'test',
+	'test-failed': 'test en échec',
+	types: 'types',
+	lint: 'lint',
+	build: 'build',
+	install: 'installation',
+	git: 'git',
+	other: 'autre'
+};
+const stepClass = (name) => (Object.hasOwn(STEPS, name) ? name : 'other');
 const percent = (n) => Math.round(n * 100) + ' %';
 const format = (key) => (key === 'testShare' ? percent : ROWS.find(([name]) => name === key)[2]);
 
@@ -108,7 +135,18 @@ export function renderComparison(ev) {
 		const cells = ev.configs.map((config, index) => (config.metrics[key] ? metricCell(config.metrics[key], key, scale, best.has(index)) : '<td>—</td>'));
 		return ['<tr><th scope="row">' + esc(label) + '</th>' + cells.join('') + '</tr>'];
 	});
-	return '<table class="ev-table"><thead>' + head + '</thead><tbody>' + pass + tests + graded.join('') + rows.join('') + '</tbody></table>';
+	// A run lints only at the end when every lint comes after its last edit: k runs out of the runs that lint.
+	const lintEnd = ev.configs.some((config) => config.metrics.lintOnlyAtEnd)
+		? '<tr><th scope="row">Lint seulement à la fin</th>' +
+			ev.configs
+				.map((config) => {
+					const values = config.metrics.lintOnlyAtEnd?.values;
+					return values ? '<td>' + pill(values.filter((value) => value === 1).length + '/' + values.length, 'neutral') + ' <span class="ev-range">runs avec lint</span></td>' : '<td>—</td>';
+				})
+				.join('') +
+			'</tr>'
+		: '';
+	return '<table class="ev-table"><thead>' + head + '</thead><tbody>' + pass + tests + graded.join('') + rows.join('') + lintEnd + '</tbody></table>';
 }
 
 // The check of one run: the verdict, the share of its tests, and a mark when the check ran again on the saved diff.
@@ -133,9 +171,23 @@ export function testShares(ev) {
 	});
 }
 
-/** The "Runs" panel: one row per planned run. */
+// One cell per tool call of the run, coloured by its first class.
+function band(steps) {
+	const cells = steps.map((name) => '<i data-step="' + stepClass(name) + '" title="' + STEPS[stepClass(name)] + '"></i>').join('');
+	return '<span class="ev-band" role="img" aria-label="' + steps.length + ' étapes">' + cells + '</span>';
+}
+
+function legend(classes) {
+	const items = Object.keys(STEPS)
+		.filter((name) => classes.has(name))
+		.map((name) => '<span><i data-step="' + name + '"></i>' + STEPS[name] + '</span>');
+	return '<p class="ev-legend">' + items.join('') + '</p>';
+}
+
+/** The "Runs" panel: one row per planned run, and the legend of the step bands. */
 export function renderRuns(ev) {
-	const head = '<tr><th scope="col">Run</th><th scope="col">Config</th><th scope="col">Statut</th><th scope="col">Vérif</th><th scope="col">Coût</th><th scope="col">Durée</th><th scope="col">Diff</th><th scope="col"></th></tr>';
+	const head = '<tr><th scope="col">Run</th><th scope="col">Config</th><th scope="col">Statut</th><th scope="col">Vérif</th><th scope="col">Coût</th><th scope="col">Durée</th><th scope="col">Diff</th><th scope="col">Étapes</th><th scope="col"></th></tr>';
+	const seen = new Set(ev.runs.flatMap((run) => (Array.isArray(run.steps) ? run.steps.map(stepClass) : [])));
 	const rows = ev.runs.map((run) => {
 		const [label, tone] = STATUS[run.status] ?? [run.status, 'neutral'];
 		const check = run.acceptance ? checkCell(run) : '—';
@@ -145,9 +197,10 @@ export function renderRuns(ev) {
 		const diff = run.diff ? '+' + run.diff.added + '−' + run.diff.deleted : '—';
 		const link = run.sessionId && run.status !== 'skipped' ? '<a href="#' + esc(run.sessionId) + '">→ session</a>' : '';
 		const hosts = run.blockedHosts?.length ? ' <small class="ev-range" title="' + esc(run.blockedHosts.join(', ')) + '">' + run.blockedHosts.length + ' hôte' + (run.blockedHosts.length > 1 ? 's' : '') + ' bloqué' + (run.blockedHosts.length > 1 ? 's' : '') + '</small>' : '';
-		return '<tr><td>' + esc(run.id) + '</td><td>' + esc(run.config) + '</td><td>' + pill(label, tone) + hosts + '</td><td>' + check + '</td><td>' + cost + '</td><td>' + wall + '</td><td>' + diff + '</td><td>' + link + '</td></tr>';
+		const steps = Array.isArray(run.steps) && run.steps.length ? band(run.steps) : '—';
+		return '<tr><td>' + esc(run.id) + '</td><td>' + esc(run.config) + '</td><td>' + pill(label, tone) + hosts + '</td><td>' + check + '</td><td>' + cost + '</td><td>' + wall + '</td><td>' + diff + '</td><td>' + steps + '</td><td>' + link + '</td></tr>';
 	});
-	return '<table class="ev-table ev-runs"><thead>' + head + '</thead><tbody>' + rows.join('') + '</tbody></table>';
+	return '<table class="ev-table ev-runs"><thead>' + head + '</thead><tbody>' + rows.join('') + '</tbody></table>' + (seen.size ? legend(seen) : '');
 }
 
 /** The options of the eval picker. */
