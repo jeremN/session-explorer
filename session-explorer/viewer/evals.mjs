@@ -300,21 +300,31 @@ export function renderCampaignList(campaigns) {
 	return '<section class="panel"><h3>Campagnes</h3><div class="ev-scroll"><table class="ev-table"><thead><tr><th scope="col">Campagne</th><th scope="col">Statut</th><th scope="col">Date</th><th scope="col">Plan</th><th scope="col">Runs</th><th scope="col">Coût</th><th scope="col"></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div></section>';
 }
 
-const sign = (value) => (value < 0 ? '−' : '+');
-const points = (value) => sign(value) + Math.round(Math.abs(value) * 100) + ' pts';
-const dollars = (value) => sign(value) + Math.abs(value).toFixed(2) + ' $';
+// A value that rounds to zero gets a plus sign, never "−0".
+const signed = (value, digits) => {
+	const text = Math.abs(value).toFixed(digits);
+	return (value < 0 && Number(text) !== 0 ? '−' : '+') + text;
+};
+const points = (value) => signed(Math.round(value * 100), 0) + ' pts';
+const dollars = (value) => signed(value, 2) + ' $';
 // An interval that leaves 0 gives a tone. `lowIsGood`: a drop is the better result (the cost).
 const toneOf = ([low, high], lowIsGood) => (low > 0 ? (lowIsGood ? 'negative' : 'positive') : high < 0 ? (lowIsGood ? 'positive' : 'negative') : 'neutral');
+const pValue = (p) => (typeof p === 'number' ? ' <span class="ev-range">p ' + (p < 0.001 ? '&lt;0.001' : p.toFixed(2)) + '</span>' : '');
 
-// One cell of the campaign table: the pass rate difference and the cost difference, each with its interval.
+// One line of a campaign cell: a label, the difference, its interval and its p-value.
+function campaignLine(label, stat, format, lowIsGood) {
+	const [low, high] = stat.ci.map((value) => format(value).replace(/ (pts|\$)$/, ''));
+	return '<span class="ev-range">' + label + '</span> ' + pill(format(stat.diff), toneOf(stat.ci, lowIsGood)) + ' <span class="ev-range">[' + low + ', ' + high + ']</span>' + pValue(stat.p);
+}
+
+// One cell of the campaign table: the pass rate, the median cost and the median tool calls, each against the reference.
 function campaignCell(cell) {
 	if (!cell) return '<td>—</td>';
-	const pass = cell.pass;
-	let html = pill(points(pass.diff), toneOf(pass.ci, false)) + ' <span class="ev-range">[' + points(pass.ci[0]).replace(' pts', '') + ', ' + points(pass.ci[1]).replace(' pts', '') + ']</span>';
-	const cost = cell.metrics?.cost;
-	if (cost) html += '<br>' + pill(dollars(cost.diff), toneOf(cost.ci, true)) + ' <span class="ev-range">[' + dollars(cost.ci[0]).replace(' $', '') + ', ' + dollars(cost.ci[1]).replace(' $', '') + ']</span>';
-	html += '<br><span class="ev-range">' + pass.config.passed + '/' + pass.config.n + ' contre ' + pass.reference.passed + '/' + pass.reference.n + '</span>';
-	return '<td>' + html + '</td>';
+	const lines = [campaignLine('réussite', cell.pass, points, false)];
+	if (cell.metrics?.cost) lines.push(campaignLine('coût', cell.metrics.cost, dollars, true));
+	if (cell.metrics?.toolCalls) lines.push(campaignLine('appels', cell.metrics.toolCalls, (value) => signed(value, 1), true));
+	lines.push('<span class="ev-range">' + cell.pass.config.passed + '/' + cell.pass.config.n + ' contre ' + cell.pass.reference.passed + '/' + cell.pass.reference.n + '</span>');
+	return '<td>' + lines.join('<br>') + '</td>';
 }
 
 /** The view of one campaign: a row per config, a column per spec and a pooled column. Each cell is the difference to the
@@ -333,6 +343,6 @@ export function renderCampaign(campaign) {
 		specs.map((spec) => '<th scope="col"><a href="#evals/campaigns/' + esc(encodeURIComponent(campaign.id)) + '/' + esc(encodeURIComponent(spec.name)) + '">' + esc(spec.name) + '</a></th>').join('') +
 		'<th scope="col">Cumul</th></tr>';
 	const rows = report.configs.map((config) => '<tr><th scope="row">' + esc(config.name) + '</th>' + specs.map((spec) => campaignCell(config.perSpec[spec.name])).join('') + campaignCell(config.pooled) + '</tr>');
-	const note = 'Écart au regard de la config de référence (' + esc(report.reference) + '), intervalle à 95 % par rééchantillonnage (' + report.resamples + ' tirages). Taux de réussite en points, coût médian en dollars.';
+	const note = 'Écart au regard de la config de référence (' + esc(report.reference) + '), intervalle à 95 % par rééchantillonnage (' + report.resamples + ' tirages). Réussite en points, coût médian en dollars, appels d\'outil en médiane ; p : test exact de Fisher (réussite) ou de permutation stratifié par tâche.';
 	return intro + '<section class="panel"><h3>Comparaison à la référence</h3><div class="ev-scroll"><table class="ev-table"><thead>' + head + '</thead><tbody>' + rows.join('') + '</tbody></table></div><p class="ev-legend">' + note + '</p></section>';
 }
