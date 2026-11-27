@@ -260,6 +260,27 @@ test('a difference whose interval leaves zero has a tone, and one that holds zer
 	assert.match(beta, /data-tone="neutral"[^>]*>−16 pts/);
 });
 
+test('a campaign cell names each line, gives its p-value, adds tool calls, and never prints a negative zero', () => {
+	const data = campaign();
+	const pooled = data.report.configs[0].pooled as ReturnType<typeof cell> & { metrics: Record<string, unknown> };
+	pooled.metrics.toolCalls = { config: 6.5, reference: 6, n: { config: 6, reference: 6 }, diff: 0.33, p: 0.7046, ci: [-1.17, 1.83] };
+	pooled.metrics.cost = { config: 0.265, reference: 0.26, n: { config: 6, reference: 6 }, diff: -0.001, p: 0.2012, ci: [-0.02, 0.01] };
+	const html = renderCampaign(data);
+	const cumul = html.split('<tbody>')[1].split('<td').at(-1)!.split('</td>')[0];
+	assert.match(cumul, /réussite/);
+	assert.match(cumul, /coût/);
+	assert.match(cumul, /appels/);
+	assert.match(cumul, /p 0\.20/);
+	assert.match(cumul, /p 0\.70/);
+	assert.match(cumul, /\+0\.3/);
+	assert.match(cumul, /\[−1\.2, \+1\.8\]/);
+	// A difference that rounds to zero has no minus sign.
+	assert.doesNotMatch(cumul, /−0\.00/);
+	assert.match(cumul, /\+0\.00 \$/);
+	// A spec cell without tool calls has no "appels" line.
+	assert.doesNotMatch(html.split('<tbody>')[1].split('<td')[1], /appels/);
+});
+
 test('a campaign with no report says so, and the list links each campaign', () => {
 	const bare = campaign();
 	delete (bare as { report?: unknown }).report;
