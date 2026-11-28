@@ -16,7 +16,10 @@ type Pair = { config: number; reference: number };
 export type PassStat = { config: { passed: number; n: number }; reference: { passed: number; n: number }; diff: number; p: number; ci: [number, number]; power?: number };
 // `config` and `reference`: the median of the values. `diff`: the stratified difference of the medians.
 export type MetricStat = { config: number; reference: number; n: Pair; diff: number; p: number; ci: [number, number] };
-export type FlagStat = { config: { flagged: number; n: number }; reference: { flagged: number; n: number }; diff: number; p: number; ci: [number, number]; power?: number };
+// `findings`: the mean count of findings per run, a finer signal than the share of flagged runs when the verdict of a
+// spec is always yes or always no. `diff`: the stratified difference of the means.
+export type CountStat = { config: number; reference: number; diff: number; p: number; ci: [number, number] };
+export type FlagStat = { config: { flagged: number; n: number }; reference: { flagged: number; n: number }; diff: number; p: number; ci: [number, number]; power?: number; findings?: CountStat };
 export type Cell = { n: Pair; pass: PassStat; metrics: Record<string, MetricStat>; graders: Record<string, FlagStat> };
 export type ConfigReport = { name: string; perSpec: Record<string, Cell>; pooled: Cell };
 export type Report = { reference: string; resamples: number; seed: number; specs: string[]; configs: ConfigReport[] };
@@ -36,6 +39,13 @@ const counted = (runs: RunRecord[]) => runs.filter((run) => run.status !== 'skip
 const flagged = (run: RunRecord, grader: string) => {
 	const grade = run.grades?.[grader];
 	return grade?.status === 'ok' ? (grade.flagged ?? grade.findings.length > 0) : undefined;
+};
+// With samples, `findings` holds the findings of all samples: the count of a run is their mean over the ok samples.
+const findingsOf = (run: RunRecord, grader: string) => {
+	const grade = run.grades?.[grader];
+	if (grade?.status !== 'ok') return undefined;
+	const ok = grade.samples ? grade.samples.filter((sample) => sample.status === 'ok').length : 1;
+	return ok === 0 ? undefined : grade.findings.length / ok;
 };
 
 // FNV-1a: the seed of a statistic follows its label, not the order of the computation.
@@ -93,13 +103,18 @@ function cellOf(pairs: Pairing[], label: string, { resamples, seed }: { resample
 		if (counts.config === 0 || counts.reference === 0) continue;
 		const hits = { config: total(all(flags, 'a')), reference: total(all(flags, 'b')) };
 		const interval = bootstrapCI(flags, draws(`grader ${name}`, 'mean'));
+		const found = strataOf(pairs, (run) => findingsOf(run, name));
+		const countTest = permutationTest(found, draws(`grader ${name}|findings`, 'mean'));
+		const countInterval = bootstrapCI(found, draws(`grader ${name}|findings`, 'mean'));
+		const mean = (values: number[]) => total(values) / values.length;
 		graders[name] = {
 			config: { flagged: hits.config, n: counts.config },
 			reference: { flagged: hits.reference, n: counts.reference },
 			diff: interval.diff,
 			p: fisherExact(hits.config, counts.config - hits.config, hits.reference, counts.reference - hits.reference),
 			ci: [interval.low, interval.high],
-			power: powerRuns(hits.config / counts.config, hits.reference / counts.reference, { seed: seedOf(seed, `${label}|grader ${name}|power`), simulations: 1000 })
+			power: powerRuns(hits.config / counts.config, hits.reference / counts.reference, { seed: seedOf(seed, `${label}|grader ${name}|power`), simulations: 1000 }),
+			findings: { config: mean(all(found, 'a')), reference: mean(all(found, 'b')), diff: countTest.diff, p: countTest.p, ci: [countInterval.low, countInterval.high] }
 		};
 	}
 	return { n, pass, metrics, graders };
@@ -158,6 +173,12 @@ export function renderReport(report: Report): string {
 				const grader = cell.graders[name];
 				if (!grader) continue;
 				lines.push(`    ${label.padEnd(width)}${`${grader.config.flagged}/${grader.config.n}`.padStart(6)} vs ${`${grader.reference.flagged}/${grader.reference.n}`.padStart(5)}   ${points(grader.diff)} [${points(grader.ci[0])}, ${points(grader.ci[1])}]  Fisher ${pText(grader.p)}  ${powerText(grader.power, grader.diff)}`);
+			}
+			lines.push(`  grader ${name}: findings per run (mean)`);
+			for (const [label, cell] of rows) {
+				const count = cell.graders[name]?.findings;
+				if (!count) continue;
+				lines.push(`    ${label.padEnd(width)}${count.config.toFixed(2).padStart(7)} vs ${count.reference.toFixed(2).padStart(7)}   ${signed(count.diff)} [${signed(count.ci[0])}, ${signed(count.ci[1])}]  permutation ${pText(count.p)}`);
 			}
 		}
 	}
