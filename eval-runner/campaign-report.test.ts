@@ -85,6 +85,24 @@ test('skipped and interrupted runs are no samples, and a run without a metric le
 	assert.equal(cell.metrics.turns, undefined);
 });
 
+test('grader findings per run: the mean count, with samples averaged over the ok samples, a permutation p and a CI', () => {
+	const finding = { severity: 'important', summary: 'x' } as const;
+	const graded = (config: string, index: number, count: number) => run(config, index, true, { cost: 1, grades: { review: { status: 'ok', findings: Array.from({ length: count }, () => finding), flagged: count > 0 } } });
+	// Three samples, two ok: 4 findings over 2 ok samples is 2 per run.
+	const sampled = run('tested', 9, true, { grades: { review: { status: 'ok', findings: Array.from({ length: 4 }, () => finding), flagged: true, samples: [{ status: 'ok', findings: 3 }, { status: 'ok', findings: 1 }, { status: 'error', findings: 0 }] } } });
+	const data: ReportEval[] = [
+		{ name: 'one', runs: [...[0, 0, 1, 1, 0, 0, 1, 0].map((count, index) => graded('tested', index + 1, count)), sampled, ...[3, 2, 4, 3, 2, 3, 3, 4, 2].map((count, index) => graded('base', index + 1, count))] }
+	];
+	const report = buildReport(data, options);
+	const counts = report.configs[0].pooled.graders.review.findings!;
+	near(counts.config, 5 / 9, 1e-9);
+	near(counts.reference, 26 / 9, 1e-9);
+	near(counts.diff, 5 / 9 - 26 / 9, 1e-9);
+	assert.ok(counts.p < 0.01, String(counts.p));
+	assert.ok(counts.ci[0] <= counts.diff && counts.diff <= counts.ci[1]);
+	assert.match(renderReport(report), /grader review: findings per run \(mean\)\n {4}one +0\.56 vs +2\.89 +-2\.33 \[-3\.00, -1\.67\][^\n]*\n {4}pooled +0\.56 vs +2\.89 +-2\.33 \[/);
+});
+
 test('grader findings: the share of flagged runs, a Fisher p, and the runs for 80 % power', () => {
 	const graded = (config: string, index: number, flagged: boolean) => run(config, index, true, { cost: 1, grades: { review: { status: 'ok', findings: flagged ? [{ severity: 'important', summary: 'x' }] : [], flagged } } });
 	const data: ReportEval[] = [
